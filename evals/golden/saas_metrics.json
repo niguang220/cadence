@@ -1,0 +1,302 @@
+[
+  {
+    "id": "active_users_asof",
+    "category": "active_user",
+    "metric": "active_user",
+    "question": "How many active users did we have as of 2025-06-30?",
+    "gold_sql": "SELECT COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id WHERE e.event_category IN ('feature_use','api_call') AND e.occurred_at >= date('2025-06-30','-28 day') AND e.occurred_at <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT COUNT(DISTINCT user_id) FROM activity_event WHERE occurred_at >= date('2025-06-30','-30 day') AND occurred_at <= '2025-06-30'",
+    "required_tables": ["activity_event", "account"],
+    "note": "28d+billable categories+exclude test accounts vs naive 30d/any-event/all-accounts"
+  },
+  {
+    "id": "mrr_total_asof",
+    "category": "mrr",
+    "metric": "mrr",
+    "question": "What was our total MRR as of 2025-06-30?",
+    "gold_sql": "SELECT SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL",
+    "required_tables": ["subscription", "account"],
+    "note": "normalized mrr + phase subset + exclude test accounts vs raw list_price over all active"
+  },
+  {
+    "id": "mrr_by_region",
+    "category": "mrr",
+    "metric": "mrr",
+    "question": "What is our MRR broken down by region as of 2025-06-30?",
+    "gold_sql": "SELECT a.region, SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test') GROUP BY a.region ORDER BY a.region",
+    "wrong_sql": "SELECT a.region, SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL GROUP BY a.region ORDER BY a.region",
+    "required_tables": ["subscription", "account"],
+    "note": "normalized mrr per governed segment vs raw list_price over all active subs including test/trial/comped"
+  },
+  {
+    "id": "active_users_by_region",
+    "category": "active_user",
+    "metric": "active_user",
+    "question": "How many active users did we have in each region as of 2025-06-30?",
+    "gold_sql": "SELECT a.region, COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id WHERE e.event_category IN ('feature_use','api_call') AND e.occurred_at >= date('2025-06-30','-28 day') AND e.occurred_at <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test') GROUP BY a.region ORDER BY a.region",
+    "wrong_sql": "SELECT a.region, COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id WHERE e.occurred_at >= date('2025-06-30','-30 day') AND e.occurred_at <= '2025-06-30' GROUP BY a.region ORDER BY a.region",
+    "required_tables": ["activity_event", "account"],
+    "note": "governed active users (28d, feature_use/api_call, exclude test accounts) by region vs naive 30d/any-category/all-accounts by region"
+  },
+  {
+    "id": "churned_mrr_q1_2025",
+    "category": "mrr_weighted_churn",
+    "metric": "mrr_weighted_churn",
+    "question": "How much recurring revenue did we lose to churn in Q1 2025?",
+    "gold_sql": "SELECT SUM(-m.mrr_delta) FROM mrr_movement m JOIN account a ON a.account_id=m.account_id WHERE m.type='churn' AND m.occurred_on >= '2025-01-01' AND m.occurred_on <= '2025-03-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT COUNT(*) FROM subscription WHERE ended_on >= '2025-01-01' AND ended_on <= '2025-03-31'",
+    "required_tables": ["mrr_movement", "account"],
+    "note": "revenue-weighted MRR churn from governed movements vs logo churn count that includes trial cancellations"
+  },
+  {
+    "id": "arpu_asof",
+    "category": "arpu",
+    "metric": "arpu",
+    "question": "What is our average MRR per paying account as of 2025-06-30?",
+    "gold_sql": "SELECT CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s JOIN account a ON a.account_id=s.account_id JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND p.tier IN ('starter','pro','enterprise') AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s WHERE s.ended_on IS NULL",
+    "required_tables": ["subscription", "account", "plan"],
+    "note": "MRR / paying accounts (paid+grandfathered, starter/pro/enterprise tiers, non-test) vs MRR / all active subscription accounts (includes trial, comped, demo, internal_test, free/staff tiers)"
+  },
+  {
+    "id": "billed_revenue_jan_2025",
+    "category": "billed_revenue",
+    "metric": "billed_revenue",
+    "question": "What was our billed revenue for January 2025?",
+    "gold_sql": "SELECT SUM(i.amount) FROM invoice i JOIN account a ON a.account_id=i.account_id WHERE i.issued_on >= '2025-01-01' AND i.issued_on <= '2025-01-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-01-31'",
+    "required_tables": ["invoice", "account"],
+    "note": "billed invoices joined to account to exclude demo/internal_test (1188) vs naive invoice sum including test accounts (1336) -- test accounts have real Jan 2025 invoices in this seed"
+  },
+  {
+    "id": "recognized_revenue_jan_2025",
+    "category": "recognized_revenue",
+    "metric": "recognized_revenue",
+    "question": "What was our revenue recognition total for January 2025?",
+    "gold_sql": "SELECT SUM(rr.amount) FROM revenue_recognition rr JOIN invoice i ON i.invoice_id=rr.invoice_id JOIN account a ON a.account_id=i.account_id WHERE rr.recognized_on >= '2025-01-01' AND rr.recognized_on <= '2025-01-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-01-31'",
+    "required_tables": ["revenue_recognition", "invoice", "account"],
+    "note": "GAAP-recognized monthly amortization joined invoice->account to exclude test accounts (99) vs lump-sum invoice amount with no exclusion (1336) -- wrong table and wrong exclusion"
+  },
+  {
+    "id": "active_users_paid_plans",
+    "category": "active_user",
+    "metric": "active_user",
+    "question": "How many active users as of 2025-06-30 were on paying accounts?",
+    "gold_sql": "SELECT COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id JOIN subscription s ON s.account_id=e.account_id WHERE e.event_category IN ('feature_use','api_call') AND e.occurred_at >= date('2025-06-30','-28 day') AND e.occurred_at <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test') AND s.ended_on IS NULL AND s.phase IN ('paid','grandfathered')",
+    "wrong_sql": "SELECT COUNT(DISTINCT e.user_id) FROM activity_event e JOIN subscription s ON s.account_id=e.account_id WHERE s.ended_on IS NULL AND e.occurred_at >= date('2025-06-30','-30 day') AND e.occurred_at <= '2025-06-30'",
+    "required_tables": ["activity_event", "account", "subscription"],
+    "note": "governed active users (28d, feature_use/api_call, paid/grandfathered phase only, non-test) = 4 vs naive 30d/any-event/any-phase/all-accounts = 13"
+  },
+  {
+    "id": "active_users_useast",
+    "category": "active_user",
+    "metric": "active_user",
+    "question": "How many active users did we have in the us-east region as of 2025-06-30?",
+    "gold_sql": "SELECT COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id WHERE e.event_category IN ('feature_use','api_call') AND e.occurred_at >= date('2025-06-30','-28 day') AND e.occurred_at <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test') AND a.region='us-east'",
+    "wrong_sql": "SELECT COUNT(DISTINCT e.user_id) FROM activity_event e JOIN account a ON a.account_id=e.account_id WHERE e.occurred_at >= date('2025-06-30','-30 day') AND e.occurred_at <= '2025-06-30' AND a.region='us-east'",
+    "required_tables": ["activity_event", "account"],
+    "note": "governed active users in us-east (28d, feature_use/api_call, exclude demo/internal_test) = 2 vs naive 30d/any-event/all-accounts = 4 (adds demo-10 and internal_test-13 users)"
+  },
+  {
+    "id": "mrr_by_tier",
+    "category": "mrr",
+    "metric": "mrr",
+    "question": "What is our MRR broken down by plan tier as of 2025-06-30?",
+    "gold_sql": "SELECT p.tier, SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id=s.account_id JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test') GROUP BY p.tier ORDER BY p.tier",
+    "wrong_sql": "SELECT p.tier, SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL GROUP BY p.tier ORDER BY p.tier",
+    "required_tables": ["subscription", "account", "plan"],
+    "note": "governed MRR per tier (paid+grandfathered, non-test, normalized mrr) vs raw list_price per tier across all active phases including trial/comped/staff and test accounts"
+  },
+  {
+    "id": "mrr_euwest",
+    "category": "mrr",
+    "metric": "mrr",
+    "question": "What was our MRR in the eu-west region as of 2025-06-30?",
+    "gold_sql": "SELECT SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test') AND a.region='eu-west'",
+    "wrong_sql": "SELECT SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND a.region='eu-west'",
+    "required_tables": ["subscription", "account"],
+    "note": "governed eu-west MRR (normalized mrr, paid+grandfathered, non-test) = 99 vs raw list_price across all active phases and test accounts = 1287"
+  },
+  {
+    "id": "mrr_annual_share",
+    "category": "mrr",
+    "metric": "mrr",
+    "question": "What share of our MRR as of 2025-06-30 comes from accounts on annual billing plans?",
+    "gold_sql": "SELECT CAST(SUM(CASE WHEN p.billing_interval='annual' THEN s.mrr ELSE 0 END) AS REAL) / SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id=s.account_id JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT CAST(COUNT(CASE WHEN p.billing_interval='annual' THEN 1 END) AS REAL) / COUNT(*) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL",
+    "required_tables": ["subscription", "account", "plan"],
+    "note": "MRR-weighted annual share over governed paying accounts = 0.115 vs logo-count fraction of all active subscriptions on annual plans = 0.067 (different numerator, wrong denominator, wrong inclusions)"
+  },
+  {
+    "id": "arr_total",
+    "category": "arr",
+    "metric": "arr",
+    "question": "What is our ARR as of 2025-06-30?",
+    "gold_sql": "SELECT SUM(s.mrr) * 12 FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL",
+    "required_tables": ["subscription", "account"],
+    "note": "ARR = 12 x governed MRR (paid+grandfathered, non-test, normalized mrr) = 15456 vs sum of plan list_prices over all active subscriptions = 4450 (wrong because annual plans already state yearly price, includes test/trial/comped)"
+  },
+  {
+    "id": "arr_by_region",
+    "category": "arr",
+    "metric": "arr",
+    "question": "What is our ARR broken down by region as of 2025-06-30?",
+    "gold_sql": "SELECT a.region, SUM(s.mrr) * 12 FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND a.account_type NOT IN ('demo','internal_test') GROUP BY a.region ORDER BY a.region",
+    "wrong_sql": "SELECT a.region, SUM(p.list_price) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL GROUP BY a.region ORDER BY a.region",
+    "required_tables": ["subscription", "account"],
+    "note": "ARR = 12 x governed MRR by region vs raw list_price sums across all active subscriptions per region including test/trial/comped accounts"
+  },
+  {
+    "id": "arpu_by_region",
+    "category": "arpu",
+    "metric": "arpu",
+    "question": "What is our average MRR per paying account in each region as of 2025-06-30?",
+    "gold_sql": "SELECT a.region, CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s JOIN account a ON a.account_id=s.account_id JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND p.tier IN ('starter','pro','enterprise') AND a.account_type NOT IN ('demo','internal_test') GROUP BY a.region ORDER BY a.region",
+    "wrong_sql": "SELECT a.region, CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s JOIN account a ON a.account_id=s.account_id WHERE s.ended_on IS NULL GROUP BY a.region ORDER BY a.region",
+    "required_tables": ["subscription", "account", "plan"],
+    "note": "ARPU per governed paying account (paid+grandfathered, starter/pro/enterprise tiers, non-test) by region vs naive MRR/accounts over all active subscriptions including trial/comped/free/staff/test"
+  },
+  {
+    "id": "arpu_pro_tier",
+    "category": "arpu",
+    "metric": "arpu",
+    "question": "What is our average MRR per paying account on the pro tier as of 2025-06-30?",
+    "gold_sql": "SELECT CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s JOIN account a ON a.account_id=s.account_id JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND s.phase IN ('paid','grandfathered') AND p.tier='pro' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT CAST(SUM(s.mrr) AS REAL) / COUNT(DISTINCT s.account_id) FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on IS NULL AND p.tier='pro'",
+    "required_tables": ["subscription", "account", "plan"],
+    "note": "ARPU for pro-tier governed paying accounts (paid+grandfathered, non-test) = 91.0 vs naive pro-tier MRR / all active pro-tier accounts including test/trial/comped = 80.69"
+  },
+  {
+    "id": "churned_mrr_h1_2025",
+    "category": "mrr_weighted_churn",
+    "metric": "mrr_weighted_churn",
+    "question": "How much recurring revenue did we lose to churn in H1 2025?",
+    "gold_sql": "SELECT SUM(-m.mrr_delta) FROM mrr_movement m JOIN account a ON a.account_id=m.account_id WHERE m.type='churn' AND m.occurred_on >= '2025-01-01' AND m.occurred_on <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT COUNT(*) FROM subscription WHERE ended_on >= '2025-01-01' AND ended_on <= '2025-06-30'",
+    "required_tables": ["mrr_movement", "account"],
+    "note": "revenue-weighted MRR churn from governed movements in H1 = 299 vs logo count of all subscriptions ended in H1 = 5 (includes trial cancellations, wrong unit)"
+  },
+  {
+    "id": "churned_mrr_tier_h1_2025",
+    "category": "mrr_weighted_churn",
+    "metric": "mrr_weighted_churn",
+    "question": "Which subscription plan tier saw the most recurring revenue churned in H1 2025?",
+    "gold_sql": "SELECT p.tier, SUM(-m.mrr_delta) AS churned_mrr FROM mrr_movement m JOIN subscription s ON s.subscription_id=m.subscription_id JOIN plan p ON p.plan_id=s.plan_id JOIN account a ON a.account_id=m.account_id WHERE m.type='churn' AND m.occurred_on >= '2025-01-01' AND m.occurred_on <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test') GROUP BY p.tier ORDER BY churned_mrr DESC",
+    "wrong_sql": "SELECT p.tier, COUNT(*) AS churned_count FROM subscription s JOIN plan p ON p.plan_id=s.plan_id WHERE s.ended_on >= '2025-01-01' AND s.ended_on <= '2025-06-30' GROUP BY p.tier ORDER BY churned_count DESC",
+    "required_tables": ["mrr_movement", "subscription", "plan", "account"],
+    "note": "tier ranked by churned MRR from governed movements (enterprise leads at $299) vs tier ranked by count of ended subscriptions (starter leads at 3, includes trial cancellations)"
+  },
+  {
+    "id": "billed_revenue_q1_2025",
+    "category": "billed_revenue",
+    "metric": "billed_revenue",
+    "question": "What was our total billed revenue in Q1 2025?",
+    "gold_sql": "SELECT SUM(i.amount) FROM invoice i JOIN account a ON a.account_id=i.account_id WHERE i.issued_on >= '2025-01-01' AND i.issued_on <= '2025-03-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-03-31'",
+    "required_tables": ["invoice", "account"],
+    "note": "billed Q1 joined to account to exclude demo/internal_test = 1536 vs naive Q1 invoice sum including test accounts = 1684 (test accounts have Jan 2025 biting invoices)"
+  },
+  {
+    "id": "recognized_revenue_q1_2025",
+    "category": "recognized_revenue",
+    "metric": "recognized_revenue",
+    "question": "What was our revenue recognition total for Q1 2025?",
+    "gold_sql": "SELECT SUM(rr.amount) FROM revenue_recognition rr JOIN invoice i ON i.invoice_id=rr.invoice_id JOIN account a ON a.account_id=i.account_id WHERE rr.recognized_on >= '2025-01-01' AND rr.recognized_on <= '2025-03-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-03-31'",
+    "required_tables": ["revenue_recognition", "invoice", "account"],
+    "note": "GAAP-recognized Q1 amortization (non-test) = 645 vs billed invoice totals for Q1 = 1684 -- annual invoice for pro plan billed in full in Jan vs amortized at 99/month, plus test account exclusion"
+  },
+  {
+    "id": "recognized_revenue_feb_2025",
+    "category": "recognized_revenue",
+    "metric": "recognized_revenue",
+    "question": "What was our revenue recognition total for February 2025?",
+    "gold_sql": "SELECT SUM(rr.amount) FROM revenue_recognition rr JOIN invoice i ON i.invoice_id=rr.invoice_id JOIN account a ON a.account_id=i.account_id WHERE rr.recognized_on >= '2025-02-01' AND rr.recognized_on <= '2025-02-28' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-02-01' AND issued_on <= '2025-02-28'",
+    "required_tables": ["revenue_recognition", "invoice", "account"],
+    "note": "recognized Feb = 398 (includes 99 amortized from the annual plan invoice issued in Jan) vs billed Feb = 299 (only the Feb monthly invoice) -- gold exceeds wrong here, showing the reverse amortization direction"
+  },
+  {
+    "id": "recognized_revenue_h1_2025",
+    "category": "recognized_revenue",
+    "metric": "recognized_revenue",
+    "question": "How much revenue did we recognize in H1 2025?",
+    "gold_sql": "SELECT SUM(rr.amount) FROM revenue_recognition rr JOIN invoice i ON i.invoice_id=rr.invoice_id JOIN account a ON a.account_id=i.account_id WHERE rr.recognized_on >= '2025-01-01' AND rr.recognized_on <= '2025-06-30' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-06-30'",
+    "required_tables": ["revenue_recognition", "invoice", "account"],
+    "note": "GAAP-recognized H1 amortization (non-test) = 1983 vs billed H1 invoice total = 2725 -- annual plan billed 1188 in Jan but contributes only 594 to H1 recognition, plus test account exclusion"
+  },
+  {
+    "id": "recognized_revenue_full_year_2025",
+    "category": "recognized_revenue",
+    "metric": "recognized_revenue",
+    "question": "What was our total recognized revenue for the full year 2025?",
+    "gold_sql": "SELECT SUM(rr.amount) FROM revenue_recognition rr JOIN invoice i ON i.invoice_id=rr.invoice_id JOIN account a ON a.account_id=i.account_id WHERE rr.recognized_on >= '2025-01-01' AND rr.recognized_on <= '2025-12-31' AND a.account_type NOT IN ('demo','internal_test')",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-12-31'",
+    "required_tables": ["revenue_recognition", "invoice", "account"],
+    "note": "full-year GAAP recognized revenue (non-test) = 2577 vs billed invoice total for the year = 2725 -- test account invoices not excluded in wrong, wrong table choice (invoice vs revenue_recognition)"
+  },
+  {
+    "id": "ctrl_account_count",
+    "category": "control",
+    "metric": "none",
+    "question": "How many accounts are there in total?",
+    "gold_sql": "SELECT COUNT(*) FROM account",
+    "wrong_sql": "SELECT COUNT(*) FROM \"user\"",
+    "required_tables": ["account"],
+    "note": "pure structural: total account rows = 35 vs total user rows = 85; no business convention required"
+  },
+  {
+    "id": "ctrl_plan_count",
+    "category": "control",
+    "metric": "none",
+    "question": "How many distinct plans do we offer?",
+    "gold_sql": "SELECT COUNT(*) FROM plan",
+    "wrong_sql": "SELECT COUNT(DISTINCT tier) FROM plan",
+    "required_tables": ["plan"],
+    "note": "pure structural: total plan rows = 8 vs distinct tier values = 5; no business convention required"
+  },
+  {
+    "id": "ctrl_active_subscriptions",
+    "category": "control",
+    "metric": "none",
+    "question": "How many subscriptions are currently active?",
+    "gold_sql": "SELECT COUNT(*) FROM subscription WHERE ended_on IS NULL",
+    "wrong_sql": "SELECT COUNT(*) FROM subscription",
+    "required_tables": ["subscription"],
+    "note": "pure structural: active (ended_on IS NULL) = 30 vs all subscriptions = 39; no business convention required"
+  },
+  {
+    "id": "ctrl_user_count",
+    "category": "control",
+    "metric": "none",
+    "question": "How many users are there in total?",
+    "gold_sql": "SELECT COUNT(*) FROM \"user\"",
+    "wrong_sql": "SELECT COUNT(DISTINCT account_id) FROM \"user\"",
+    "required_tables": ["user"],
+    "note": "pure structural: total user rows = 85 vs distinct accounts with users = 35; no business convention required"
+  },
+  {
+    "id": "ctrl_invoices_2025",
+    "category": "control",
+    "metric": "none",
+    "question": "How many invoices were issued in 2025?",
+    "gold_sql": "SELECT COUNT(*) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-12-31'",
+    "wrong_sql": "SELECT SUM(amount) FROM invoice WHERE issued_on >= '2025-01-01' AND issued_on <= '2025-12-31'",
+    "required_tables": ["invoice"],
+    "note": "pure structural: count of 2025 invoices = 14 vs sum of 2025 invoice amounts = 2725.0; no business convention required"
+  },
+  {
+    "id": "ctrl_accounts_by_region",
+    "category": "control",
+    "metric": "none",
+    "question": "How many accounts are in each region?",
+    "gold_sql": "SELECT region, COUNT(*) FROM account GROUP BY region ORDER BY region",
+    "wrong_sql": "SELECT region, COUNT(DISTINCT account_type) FROM account GROUP BY region ORDER BY region",
+    "required_tables": ["account"],
+    "note": "pure structural: account count per region vs distinct account_type count per region; no business convention required"
+  }
+]
