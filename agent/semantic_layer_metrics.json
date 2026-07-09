@@ -1,0 +1,120 @@
+[
+  {
+    "name": "active_user",
+    "aliases": ["active user", "active users", "MAU", "monthly active users"],
+    "definition": "Distinct users with a qualifying activity event in the trailing 28 days, at non-test accounts.",
+    "measure": "COUNT(DISTINCT user_id)",
+    "grain": "distinct user",
+    "required_filters": [
+      "event_category IN ('feature_use','api_call')",
+      "occurred_at within 28 days before the as-of date",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Counting any event in the last 30 days, or including demo/internal_test accounts."
+  },
+  {
+    "name": "mrr",
+    "aliases": ["MRR", "monthly recurring revenue"],
+    "definition": "Sum of monthly-normalized recurring revenue over paying subscriptions.",
+    "measure": "SUM(subscription.mrr)",
+    "grain": "point-in-time snapshot",
+    "required_filters": [
+      "subscription.ended_on IS NULL (active)",
+      "phase IN ('paid','grandfathered')",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Summing plan.list_price (annual not /12), or counting trial/comped subscriptions."
+  },
+  {
+    "name": "mrr_weighted_churn",
+    "aliases": ["churn", "churn rate", "revenue churn", "MRR churn"],
+    "definition": "Revenue-weighted churn = churned MRR in the period / MRR active at period start (not logo count). Numerator and denominator computed separately.",
+    "measure": "SUM(-mrr_delta)",
+    "grain": "period ratio (numerator / denominator)",
+    "required_filters": [
+      "numerator: mrr_movement.type = 'churn' within the period",
+      "denominator: active paying MRR (phase IN ('paid','grandfathered'), ended_on IS NULL) as of the period start",
+      "exclude trial cancellations (they are not in mrr_movement)",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Logo churn (counting churned accounts) instead of MRR-weighting; counting trial cancellations."
+  },
+  {
+    "name": "arr",
+    "aliases": ["ARR", "annual recurring revenue"],
+    "definition": "Annual recurring revenue = 12 × MRR; annualized view of active paying subscriptions.",
+    "measure": "SUM(subscription.mrr) * 12",
+    "grain": "point-in-time snapshot",
+    "required_filters": [
+      "subscription.ended_on IS NULL (active)",
+      "phase IN ('paid','grandfathered')",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Summing plan.list_price directly for annual plans (already annualized) instead of using subscription.mrr * 12."
+  },
+  {
+    "name": "arpu",
+    "aliases": ["ARPU", "average revenue per user", "average revenue per account"],
+    "definition": "Average MRR per paying account; excludes free, trial, comped, and staff subscriptions as well as test accounts.",
+    "measure": "SUM(subscription.mrr) / COUNT(DISTINCT subscription.account_id)",
+    "grain": "per paying account",
+    "required_filters": [
+      "subscription.ended_on IS NULL (active)",
+      "phase IN ('paid','grandfathered')",
+      "plan.tier IN ('starter','pro','enterprise')",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Including free/trial/comped/staff subscriptions in the account count, or using logo count of all accounts instead of only paying accounts."
+  },
+  {
+    "name": "expansion_mrr",
+    "aliases": ["expansion", "expansion revenue", "upsell MRR"],
+    "definition": "MRR gained from existing accounts upgrading or expanding their subscriptions in the period.",
+    "measure": "SUM(mrr_delta)",
+    "grain": "period total",
+    "required_filters": [
+      "mrr_movement.type = 'expansion'",
+      "occurred_on within the period",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Including 'new' movements (new subscriptions) instead of only 'expansion'; including test accounts."
+  },
+  {
+    "name": "contraction_mrr",
+    "aliases": ["contraction", "contraction revenue", "downgrade MRR"],
+    "definition": "MRR lost from existing accounts downgrading their subscriptions in the period (positive number representing a reduction).",
+    "measure": "SUM(-mrr_delta)",
+    "grain": "period total",
+    "required_filters": [
+      "mrr_movement.type = 'contraction'",
+      "occurred_on within the period",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Confusing contraction with churn; not negating mrr_delta (which is negative for contraction) to get a positive shrinkage value."
+  },
+  {
+    "name": "recognized_revenue",
+    "aliases": ["recognized revenue", "revenue recognition", "recognized revenue total", "deferred revenue recognized", "GAAP revenue"],
+    "definition": "Amortized monthly revenue recognized in the period per GAAP/ASC 606 accrual rules, sourced from revenue_recognition table.",
+    "measure": "SUM(revenue_recognition.amount)",
+    "grain": "period total",
+    "required_filters": [
+      "revenue_recognition.recognized_on within the period",
+      "join to invoice and account to apply account filters",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Using invoice.amount (billed/cash) instead of revenue_recognition.amount (amortized); annual invoices must be spread across 12 months."
+  },
+  {
+    "name": "billed_revenue",
+    "aliases": ["billed revenue", "invoiced revenue", "cash revenue"],
+    "definition": "Total invoice amount issued to accounts in the period (cash/billing basis, not amortized).",
+    "measure": "SUM(invoice.amount)",
+    "grain": "period total",
+    "required_filters": [
+      "invoice.issued_on within the period",
+      "account_type NOT IN ('demo','internal_test')"
+    ],
+    "common_mistake": "Using revenue_recognition.amount (amortized/GAAP) instead of invoice.amount; this metric is billed/cash basis and will spike for annual invoices."
+  }
+]
