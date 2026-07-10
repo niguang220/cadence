@@ -20,3 +20,5 @@ def test_two_step_plan_produces_analysis(saas_db, monkeypatch):
     res = run_agent(saas_db, "what's the mrr trend?", model=model)
     assert res.answer
     assert any(isinstance(s, dict) and s.get("node") == "python_analyze" for s in res.trace)
+    # the python step's analysis propagated end-to-end into the user-facing answer
+    assert "Analysis:" in res.answer and "trend" in res.answer

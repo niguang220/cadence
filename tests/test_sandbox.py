@@ -45,3 +45,9 @@ def test_timeout_is_error():
         raise subprocess.TimeoutExpired(cmd, timeout)
     res = run_in_sandbox("prog", {}, runner=runner)
     assert not res.ok and "timed out" in res.error
+
+def test_docker_not_available_is_error():
+    def runner(cmd, stdin_text, timeout):
+        raise FileNotFoundError("docker")
+    res = run_in_sandbox("prog", {}, runner=runner)
+    assert not res.ok and "docker not available" in res.error
