@@ -78,3 +78,21 @@ def test_sql_repair_exhausted_refuses_without_python(saas_db):
     res = run_agent(saas_db, "mrr growth?", model=model)
     nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
     assert "python_generate" not in nodes and "couldn't" in res.answer.lower()
+
+
+def test_python_null_analysis_still_marked_as_python_step(saas_db, monkeypatch):
+    # A python step whose stdout is literally `null` parses to analysis=None. respond
+    # must still recognize a python step RAN (keyed on python_analysis presence, not a
+    # None sentinel), else a null result is silently misreported as SQL-only.
+    monkeypatch.setattr(graph, "run_in_sandbox",
+                        lambda prog, data, **kw: graph.SandboxResult(True, stdout='null'))
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"pull mrr"},{"kind":"python","instruction":"x"}]',
+        "SELECT mrr FROM subscription",
+        "import sys,json; print('null')",
+    )
+    res = run_agent(saas_db, "mrr?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "python_analyze" in nodes                     # the python step did run
+    respond = [s for s in res.trace if isinstance(s, dict) and s.get("node") == "respond"][-1]
+    assert respond.get("python_analysis") is True        # not misclassified as SQL-only

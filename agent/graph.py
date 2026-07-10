@@ -455,10 +455,10 @@ def _respond(state: AgentState) -> dict:
                            "governance": "blocked",
                            "blocked_columns": governance.columns}]}
     answer = _format_answer(state["result"])
-    analysis = (state.get("python_analysis") or {}).get("analysis")
-    if analysis is None:                                # SQL-only: answer AND trace unchanged
+    if "python_analysis" not in state:                  # SQL-only: answer AND trace unchanged
         return {"answer": answer, "trace": [{"node": "respond"}]}
-    return {"answer": f"{answer}\nAnalysis: {analysis}",   # a Python step ran
+    analysis = (state.get("python_analysis") or {}).get("analysis")   # a Python step ran
+    return {"answer": f"{answer}\nAnalysis: {analysis}",
             "trace": [{"node": "respond", "python_analysis": True}]}
 
 
