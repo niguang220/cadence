@@ -1,5 +1,6 @@
 from agent.graph import run_agent
 import agent.graph as graph
+from agent.db.build_demo_db import build as build_demo_db
 
 
 class _ScriptModel:
@@ -96,3 +97,32 @@ def test_python_null_analysis_still_marked_as_python_step(saas_db, monkeypatch):
     assert "python_analyze" in nodes                     # the python step did run
     respond = [s for s in res.trace if isinstance(s, dict) and s.get("node") == "respond"][-1]
     assert respond.get("python_analysis") is True        # not misclassified as SQL-only
+
+
+def test_governed_sql_result_never_dispatches_python(tmp_path, monkeypatch):
+    # Cross-component regression guard: a PII-governed SQL result must refuse BEFORE any
+    # python step runs, so untrusted compute never touches governed rows. Enforced today
+    # by run_query's result-governance gate (governed result -> ok=False -> validate
+    # refuses as governance_block -> python never dispatched). This locks the invariant
+    # regardless of WHICH component enforces it: if a future change removes
+    # result-governance from run_query or reroutes governance_block, the sandbox would
+    # run on governed data and this test turns red.
+    db = str(build_demo_db(tmp_path / "demo.db"))
+    sandbox_calls = []
+    def _spy(prog, data, **kw):
+        sandbox_calls.append(1)
+        return graph.SandboxResult(True, stdout='{"x": 1}')
+    monkeypatch.setattr(graph, "run_in_sandbox", _spy)
+    model = _ScriptModel(
+        # a [sql, python] plan: absent the guarantee, python WOULD be dispatched
+        '[{"kind":"sql","instruction":"emails"},{"kind":"python","instruction":"count"}]',
+        # sql-governance passes (sees only customer_id); the RESULT column 'email' is a
+        # PII name, so run_query's result-governance blocks it (ok=False).
+        "SELECT customer_id AS email FROM customer",
+    )
+    res = run_agent(db, "list customer emails", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert sandbox_calls == []                            # sandbox never called
+    assert "python_generate" not in nodes                # python step never dispatched
+    assert "python_analyze" not in nodes
+    assert "governance violation" in res.answer           # refused via the governance gate
