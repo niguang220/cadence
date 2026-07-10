@@ -113,3 +113,28 @@ Rules:
 Question: {question}
 
 JSON:"""
+
+
+PYTHON_REPAIR_BLOCK = """Your previous program failed — fix the bug, do not repeat it.
+Previous program:
+{previous_code}
+It failed with:
+{previous_error}
+
+"""
+
+PYTHON_GEN_PROMPT = """Write a complete Python program for one analysis step.
+
+The program MUST:
+- read its input from stdin as JSON: {{"columns": [...], "rows": [[...], ...]}}
+- compute what the instruction asks, using only the standard library and pandas
+- write its result to stdout as a single JSON object (numbers/strings/lists only;
+  for a chart, emit a base64 PNG string under a "chart" key)
+- not read files, not access the network, not print anything except the JSON
+
+{repair_block}Instruction: {instruction}
+
+Input columns: {columns}
+Sample rows (first few): {sample_rows}
+
+Output ONLY the program (optionally in a ```python fence), nothing else."""
