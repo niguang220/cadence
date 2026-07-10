@@ -23,6 +23,12 @@ class FakeModel:
 
     def invoke(self, prompt):
         self.last_prompt = prompt
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # Plan-aware: the planner is the first model call under the step-loop graph;
+        # a planner prompt yields a single SQL step so the configured SQL still drives
+        # generation (last_prompt is thus the generation prompt, not the plan).
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self._reply})()
 
 

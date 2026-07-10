@@ -14,17 +14,27 @@ from agent.validate import (has_aggregate, has_group_by, has_join, has_order_by,
 
 
 class SequenceModel:
-    """Returns canned replies in order (last one repeats); records every prompt."""
+    """Returns canned replies in order (last one repeats); records every prompt.
+
+    Plan-aware: under the planner-driven graph the FIRST model call is the planner, so
+    a planner prompt yields a single SQL-step plan (it does NOT consume a scripted
+    reply). ``calls`` counts every invoke including the planner; ``_gen`` indexes the
+    scripted SQL replies, so the draft/repair sequence is unchanged."""
 
     def __init__(self, *replies: str):
         self._replies = list(replies)
         self.prompts: list[str] = []
         self.calls = 0
+        self._gen = 0
 
     def invoke(self, prompt):
         self.prompts.append(prompt)
-        reply = self._replies[min(self.calls, len(self._replies) - 1)]
         self.calls += 1
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
+        reply = self._replies[min(self._gen, len(self._replies) - 1)]
+        self._gen += 1
         return type("R", (), {"content": reply})()
 
 
@@ -79,11 +89,12 @@ def test_loop_self_corrects_on_execution_error(tmp_path):
         "SELECT COUNT(*) FROM track",        # attempt 2 (repair): works
     )
     res = answer_question(db, "how many tracks are there?", model=model)
-    assert model.calls == 2                  # repaired after one failure
+    assert model.calls == 3                  # planner + draft + one repair
     assert res.execution.ok and res.execution.rows == [(306,)]
     assert "306" in res.answer
     # the repair attempt's prompt carried the failing SQL + the DB error
-    assert "no_such_col" in model.prompts[1]
+    # (prompts[0] is the planner, [1] the first draft, [2] the repair)
+    assert "no_such_col" in model.prompts[2]
 
 
 def test_loop_repairs_a_validate_flag_not_just_errors(tmp_path):
@@ -93,7 +104,7 @@ def test_loop_repairs_a_validate_flag_not_just_errors(tmp_path):
         "SELECT name, milliseconds FROM track ORDER BY milliseconds DESC LIMIT 5",
     )
     res = answer_question(db, "what are the 5 longest tracks, longest first?", model=model)
-    assert model.calls == 2                  # validate flagged the missing ORDER BY -> repaired
+    assert model.calls == 3                  # planner + draft + one repair (missing ORDER BY)
     assert "ORDER BY" in res.sql and res.execution.ok
 
 
@@ -101,7 +112,7 @@ def test_loop_gives_up_after_max_attempts(tmp_path):
     db = build(tmp_path / "t.db")
     model = SequenceModel("SELECT no_such_col FROM track")   # always broken
     res = answer_question(db, "how many tracks are there?", model=model)
-    assert model.calls == MAX_ATTEMPTS       # bounded
+    assert model.calls == MAX_ATTEMPTS + 1   # bounded: planner + MAX_ATTEMPTS generations
     assert not res.execution.ok
     assert "couldn't answer" in res.answer.lower()
     generates = [t for t in res.trace if t["node"] == "generate_sql"]

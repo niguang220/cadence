@@ -42,6 +42,15 @@ class AgentState(TypedDict, total=False):
     result: Optional[ExecutionResult]
     attempts: int                    # generations done so far (0 = none yet; >0 = repairing)
 
+    # plan-driven execution (Plan 2)
+    plan: list[dict]                 # serialized [{kind, instruction}, ...]
+    plan_attempts: int               # planner retries (bounded)
+    step_index: int                  # cursor into plan
+    step_results: list[dict]         # per-step output, appended as steps complete
+    python_code: str                 # current python step's generated program
+    python_attempts: int             # python-step retries (bounded)
+    python_analysis: dict            # parsed sandbox output for the current python step
+
     # outputs
     answer: str
     assumptions: list[str]

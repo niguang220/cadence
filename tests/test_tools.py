@@ -14,11 +14,18 @@ from agent.tools import build_get_schema_tool
 
 class FakeToolModel:
     """Has bind_tools (-> tool-calling path). Replays scripted steps:
-    ("tool", ["t1", ...]) emits a get_schema call; ("sql", "SELECT ...") answers."""
+    ("tool", ["t1", ...]) emits a get_schema call; ("sql", "SELECT ...") answers.
+
+    Plan-aware: under the planner-driven graph the FIRST model call is the planner,
+    which invokes with a string prompt (the tool path invokes with a message list). A
+    planner prompt yields a single SQL-step plan and does NOT consume a scripted step;
+    ``calls`` counts every invoke (planner included), while ``_step`` indexes the
+    scripted tool/sql steps -- so each ``calls`` assertion is the old count + 1."""
 
     def __init__(self, *steps):
         self._steps = list(steps)
         self.calls = 0
+        self._step = 0
 
     def bind_tools(self, tools):
         self.tools = tools
@@ -28,8 +35,12 @@ class FakeToolModel:
         return self
 
     def invoke(self, messages):
-        kind, payload = self._steps[min(self.calls, len(self._steps) - 1)]
         self.calls += 1
+        text = messages if isinstance(messages, str) else str(messages)
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return AIMessage(content='[{"kind": "sql", "instruction": "answer the question"}]')
+        kind, payload = self._steps[min(self._step, len(self._steps) - 1)]
+        self._step += 1
         if kind == "tool":
             return AIMessage(content="", tool_calls=[
                 {"name": "get_schema", "args": {"table_names": payload}, "id": f"c{self.calls}"}])
@@ -65,7 +76,7 @@ def test_model_calls_get_schema_then_writes_sql(tmp_path):
     res = answer_question(db, "how many track-supplier links exist?", model=model, tables=tables)
 
     assert res.execution.ok
-    assert model.calls == 2                            # one tool round, then the SQL
+    assert model.calls == 3                            # planner, one tool round, then the SQL
     gen = next(t for t in res.trace if t["node"] == "generate_sql")
     assert "track_supplier" in gen.get("requested_tables", [])
 
@@ -80,7 +91,7 @@ def test_tool_path_still_self_corrects(tmp_path):
     )
     res = answer_question(db, "how many tracks are there?", model=model, tables=tables)
     assert res.execution.ok and res.execution.rows == [(306,)]
-    assert model.calls == 2
+    assert model.calls == 3                             # planner + draft + one repair
 
 
 def test_tool_call_then_self_correct(tmp_path):
@@ -95,6 +106,6 @@ def test_tool_call_then_self_correct(tmp_path):
     )
     res = answer_question(db, "how many track-supplier links exist?", model=model, tables=tables)
     assert res.execution.ok
-    assert model.calls == 3                              # tool round + bad SQL + repair
+    assert model.calls == 4                              # planner + tool round + bad SQL + repair
     gen = [t for t in res.trace if t["node"] == "generate_sql"]
     assert len(gen) == 2 and "track_supplier" in gen[0].get("requested_tables", [])

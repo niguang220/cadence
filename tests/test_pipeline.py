@@ -9,7 +9,11 @@ from agent.pipeline import answer_question
 
 
 class FakeModel:
-    """Stands in for the chat model: returns a fixed string, records the prompt."""
+    """Stands in for the chat model: returns a fixed string, records the prompt.
+
+    Plan-aware: under the planner-driven graph the FIRST model call is the planner,
+    so a planner prompt yields a single SQL-step plan and any other prompt yields the
+    configured SQL. This keeps 'first call returns SELECT ...' tests meaningful."""
 
     def __init__(self, reply: str):
         self._reply = reply
@@ -19,6 +23,9 @@ class FakeModel:
     def invoke(self, prompt):
         self.last_prompt = prompt
         self.calls += 1
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self._reply})()
 
 
@@ -93,7 +100,7 @@ def test_pipeline_rejects_generated_pii_sql_without_repairing(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT email FROM customer LIMIT 5")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 1
+    assert model.calls == 2                            # planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     assert "couldn't answer" in res.answer.lower()
@@ -108,7 +115,7 @@ def test_pipeline_result_layer_governance_block_is_traced(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT 'redacted' AS email FROM customer LIMIT 1")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 1
+    assert model.calls == 2                            # planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     execute = next(t for t in res.trace if t["node"] == "execute")
