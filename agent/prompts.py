@@ -95,3 +95,21 @@ Problem: {problem}
 
 Write a corrected single read-only query.
 SQL:"""
+
+
+PLANNER_PROMPT = """You plan how to answer a data question about a SQL database.
+Output a JSON array of steps. Each step is {{"kind": "sql"|"python", "instruction": "..."}}.
+
+Rules:
+- Always start with exactly one "sql" step that fetches the raw rows needed.
+- Add a "python" step ONLY if the answer needs computation or a chart that SQL can't
+  do directly (e.g. a trend line, a cohort-retention matrix, a plotted curve).
+- Most questions are one "sql" step. Do not invent extra steps.
+- The python step receives the sql step's rows; describe what to compute, not code.
+
+{semantic_block}Schema:
+{schema}
+
+Question: {question}
+
+JSON:"""
