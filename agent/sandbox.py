@@ -45,7 +45,7 @@ def build_sandbox_command(program: str, *, image: str = _IMAGE) -> list[str]:
     return ["docker", "run", "-i", *_ISOLATION_FLAGS, image, "python", "-c", program]
 
 
-_MAX_OUTPUT_BYTES = 1_000_000   # cap captured stdout/stderr: a print-bomb inside the
+_MAX_OUTPUT_CHARS = 1_000_000   # cap captured stdout/stderr (character count): a print-bomb inside the
 #   container shouldn't be able to grow the host-side buffer without bound. The
 #   container's --memory/--pids/timeout limits already bound how much it can emit;
 #   this truncates what we hand downstream. (A fully streaming early-kill reader is a
@@ -57,8 +57,8 @@ def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
                           timeout=timeout)
     return subprocess.CompletedProcess(
         proc.args, proc.returncode,
-        stdout=(proc.stdout or "")[:_MAX_OUTPUT_BYTES],
-        stderr=(proc.stderr or "")[:_MAX_OUTPUT_BYTES])
+        stdout=(proc.stdout or "")[:_MAX_OUTPUT_CHARS],
+        stderr=(proc.stderr or "")[:_MAX_OUTPUT_CHARS])
 
 
 def run_in_sandbox(program: str, stdin_data: dict, *, timeout: float = 10.0,
