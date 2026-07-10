@@ -5,8 +5,7 @@
 
 The query path needs ``DEEPSEEK_API_KEY`` in the environment (a local ``.env`` is
 picked up too). ``--retrieval-only`` runs schema retrieval alone (database +
-embedding model, no LLM), so it works fully offline -- handy for verifying the
-Docker image baked its assets. Builds the bundled SaaS database on first use.
+embedding model, no LLM), so it works fully offline. Builds the bundled SaaS database on first use.
 """
 from __future__ import annotations
 

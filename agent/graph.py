@@ -1,7 +1,7 @@
 """The agent as a LangGraph state machine.
 
     preflight_context
-    -> clarify_check (Phase 2/#8)
+    -> clarify_check
     -> retrieve_schema --(no tables)--> END (refuse)
     -> generate_sql ---(CANNOT_ANSWER)-> END (decline)
     -> execute -> validate --(ok)--------> respond -> END

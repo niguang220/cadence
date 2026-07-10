@@ -29,7 +29,7 @@ _RANKING_WORDS = (
 )
 # Known limitation: " per " also matches enumeration ("list customers per country"),
 # which can false-flag a correct non-aggregated query. Harmless on the current
-# golden set (those "per" questions get a GROUP BY); revisit with Phase 3 hard cases.
+# golden set (those "per" questions get a GROUP BY); revisit with harder test cases.
 _AGG_WORDS = ("how many", "count", "total", "sum", "average", "avg", "number of", " per ")
 
 

@@ -4,9 +4,8 @@ One TypedDict flows through every node. ``total=False`` so nodes only return the
 keys they touch; LangGraph merges them. ``trace`` uses an ``operator.add`` reducer
 so each node *appends* its step instead of overwriting the list.
 
-Phase 2 adds the reliability loop; the fields it needs (``error``, ``retry_count``,
-``clarification``) live here from the start so the loop is a wiring change, not a
-state-schema change.
+Fields for the reliability loop (``error``, ``retry_count``, ``clarification``) live
+here from the start so the loop is a wiring change, not a state-schema change.
 """
 from __future__ import annotations
 

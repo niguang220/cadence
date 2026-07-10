@@ -17,12 +17,16 @@ def test_query_error_is_returned_not_raised(tmp_path):
     assert not res.ok and res.error
 
 
-def test_write_blocked_by_read_only_connection(tmp_path):
-    # defence in depth: a write that bypassed the safety gate still fails read-only
+def test_write_rejected_defence_in_depth(tmp_path):
+    # A write is rejected whether or not it slips past the safety gate:
+    #  - without assume_safe, the parser gate rejects it;
+    #  - with assume_safe, the SQLite authorizer denies the DELETE action code.
     db = build(tmp_path / "t.db")
-    res = run_query(db, "DELETE FROM track")
-    assert not res.ok
-    assert "readonly" in res.error.lower() or "read-only" in res.error.lower()
+    gated = run_query(db, "DELETE FROM track")
+    assert not gated.ok and "unsafe" in gated.error.lower()
+    authorized = run_query(db, "DELETE FROM track", assume_safe=True)
+    assert not authorized.ok
+    assert "read" not in authorized.error.lower() or "not authorized" in authorized.error.lower()
 
 
 def test_max_rows_truncates(tmp_path):

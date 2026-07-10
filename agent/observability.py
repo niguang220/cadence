@@ -33,7 +33,7 @@ def setup_phoenix() -> bool:
     try:
         from phoenix.otel import register
         register(
-            project_name=os.getenv("PHOENIX_PROJECT", "datapilot"),
+            project_name=os.getenv("PHOENIX_PROJECT", "cadence"),
             endpoint=os.getenv("PHOENIX_ENDPOINT", "http://localhost:6006/v1/traces"),
             auto_instrument=True,   # picks up the installed openinference LangChain instrumentor
         )
