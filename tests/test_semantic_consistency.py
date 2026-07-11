@@ -35,6 +35,14 @@ def test_structured_mismatch_verdict():
     assert not v.ok and v.mismatch_kind == "measure" and v.repair_hint == "use AVG"
 
 
+def test_non_boolean_ok_fails_open():
+    # a malformed verdict ({"ok": null/0/"false"}) is a broken judge -> fail-open ok=True,
+    # not an explicit mismatch (would burn the repair budget) nor a fake success.
+    for bad in ('{"ok": null}', '{"ok": 0}', '{"ok": "false"}'):
+        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), _Fake(bad))
+        assert v.ok, f"{bad!r} should fail open"
+
+
 def test_unparseable_defaults_ok():
     # a broken judge must not block a query -> default ok (fail open, bounded elsewhere)
     v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), _Fake("junk"))

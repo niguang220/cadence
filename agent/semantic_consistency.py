@@ -58,9 +58,12 @@ def check_semantic_consistency(question: str, sql: str, result: ExecutionResult,
         return ConsistencyVerdict(ok=True)                    # fail-open on a broken judge
     if not isinstance(data, dict):
         return ConsistencyVerdict(ok=True)
-    # Default ok=True: only a clear, explicit ``"ok": false`` is treated as a mismatch.
+    ok = data.get("ok", True)
+    if not isinstance(ok, bool):
+        return ConsistencyVerdict(ok=True)   # non-boolean verdict -> broken judge, fail-open
+    # Only a clear, explicit ``"ok": false`` (a real JSON boolean) is a mismatch.
     return ConsistencyVerdict(
-        ok=bool(data.get("ok", True)),
+        ok=ok,
         mismatch_kind=str(data.get("mismatch_kind", "")),
         expected=str(data.get("expected", "")),
         observed=str(data.get("observed", "")),
