@@ -252,3 +252,27 @@ def test_normal_question_proceeds_past_intent(saas_db):
     intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
     assert intent_trace.get("intent_kind") == "data"
     assert not intent_trace.get("refused")
+    # teeth: a normal question PROCEEDS through feasibility (not refused) -> planner.
+    assert "feasibility_assessment" in nodes
+    feasibility_trace = [s for s in res.trace if s.get("node") == "feasibility_assessment"][0]
+    assert feasibility_trace.get("feasible") is True
+    assert not feasibility_trace.get("refused")
+    assert res.answer
+
+
+def test_off_topic_question_refuses_at_feasibility_not_schema_recall(saas_db):
+    # teeth: the empty-recall refusal has MOVED from schema_recall (now pure
+    # retrieval, never refuses) to feasibility_assessment (the single deterministic
+    # refusal owner).
+    model = PlanningFakeModel("SELECT 1")
+    res = run_agent(saas_db, "what is the meaning of life", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "schema_recall" in nodes
+    schema_trace = [s for s in res.trace if s.get("node") == "schema_recall"][0]
+    assert not schema_trace.get("refused")             # schema_recall itself never refuses
+    assert "feasibility_assessment" in nodes
+    feasibility_trace = [s for s in res.trace if s.get("node") == "feasibility_assessment"][0]
+    assert feasibility_trace.get("refused") is True
+    assert feasibility_trace.get("reason_code") == "no_recalled_tables"
+    assert res.sql == ""
+    assert "planner" not in nodes

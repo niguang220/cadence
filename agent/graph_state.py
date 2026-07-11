@@ -32,6 +32,7 @@ class AgentState(TypedDict, total=False):
     enhanced_question: str           # query_enhance's rewrite; feeds retrieval/planner/SQL gen (original kept for the answer/trace)
     retrieved_tables: list[str]
     join_paths: list[dict]           # table_relation's deterministic FK-edge hints among retrieved_tables
+    feasibility_reason: str          # feasibility_assessment's refusal reason_code (e.g. no_recalled_tables)
     semantic_metrics: list[dict[str, Any]]  # serializable governed metrics bound in preflight
     clarification_options: list[dict[str, Any]]
     clarification_response: str

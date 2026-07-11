@@ -74,11 +74,16 @@ def test_pipeline_does_not_put_pii_columns_in_prompt(tmp_path):
 
 
 def test_pipeline_refuses_when_no_tables_match(tmp_path):
+    # schema_recall is pure retrieval now; feasibility_assessment owns the
+    # empty-recall refusal (Plan 3 migration).
     from agent.db.build_demo_db import build
     db = build(tmp_path / "t.db")
     res = answer_question(db, "what is the meaning of life", model=FakeModel("SELECT 1"))
     assert res.retrieved_tables == [] and res.sql == ""
-    assert "couldn't identify" in res.answer.lower()
+    feasibility = next(s for s in res.trace if s.get("node") == "feasibility_assessment")
+    assert feasibility.get("refused") is True
+    assert feasibility.get("reason_code") == "no_recalled_tables"
+    assert feasibility["message"] in res.answer
 
 
 def test_pipeline_handles_model_declining_with_cannot_answer(tmp_path):

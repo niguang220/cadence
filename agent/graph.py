@@ -3,8 +3,9 @@
     preflight_context
     -> intent_recognition --(out_of_scope)--> END (refuse)
     -> clarify_check
-    -> schema_recall --(no tables)--> END (refuse)
+    -> schema_recall (pure retrieval; never refuses)
     -> table_relation
+    -> feasibility_assessment --(no_recalled_tables)--> END (refuse)
     -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
                               \\--(invalid & exhausted)------> respond (refuse)
     -> dispatch (reads plan[step_index].kind):
@@ -51,6 +52,7 @@ from agent.clarify import (
 )
 from agent.db.introspect import introspect, render_schema
 from agent.execution import ExecutionResult, run_query
+from agent.feasibility import assess_feasibility
 from agent.graph_state import AgentState
 from agent.generation import (AnswerResult, _extract_sql, _format_answer, _NO_QUERY,
                              generate_sql)
@@ -265,18 +267,19 @@ def _query_enhance(state: AgentState, config=None) -> dict:
 
 
 def _schema_recall(state: AgentState) -> dict:
+    """Pure retrieval: top-k table recall. Does NOT refuse on empty recall --
+    that decision belongs to feasibility_assessment (the single deterministic
+    refusal owner), which sees this node's empty ``retrieved_tables`` and issues
+    the ``no_recalled_tables`` refusal."""
     tables = state.get("tables")
     if tables is None:
         tables = introspect(state["db_path"])
     top_k = retrieve(_retrieval_question(state), tables, k=state.get("k", 5))
     if not top_k:
-        # honest refusal: don't dump the whole schema and let the model
-        # hallucinate a query for an off-topic question.
         return {
             "tables": tables,
             "retrieved_tables": [],
-            "result": ExecutionResult(False, error=_NO_QUERY),
-            "answer": "I couldn't identify any tables relevant to this question.",
+            "schema": "",
             "trace": [{"node": "schema_recall", "tables": [], "retrieval_failed": True}],
         }
     schema = render_schema(tables, only=top_k, include_fk_neighbors=True)
@@ -302,6 +305,23 @@ def _table_relation(state: AgentState) -> dict:
         hint = "\n".join(f"{p['from']} -> {p['to']} (on {p['on']})" for p in paths)
         out["schema"] = f"{state['schema']}\n\nJoin paths:\n{hint}"
     return out
+
+
+def _feasibility_assessment(state: AgentState) -> dict:
+    """Deterministic feasibility gate: zero LLM. Owns the ONE hard refusal
+    (empty recall, moved here from schema_recall) and traces other signals
+    (e.g. a missing direct join edge) as risk, never as a refusal."""
+    v = assess_feasibility(state["question"], state["tables"], state["retrieved_tables"],
+                           _semantic_metrics(state), state.get("join_paths", []))
+    if not v.feasible:
+        return {
+            "answer": v.message,
+            "result": ExecutionResult(False, error=_NO_QUERY),
+            "feasibility_reason": v.reason_code,
+            "trace": [{"node": "feasibility_assessment", "refused": True,
+                       "reason_code": v.reason_code, "message": v.message}],
+        }
+    return {"trace": [{"node": "feasibility_assessment", "feasible": True, "risks": v.risks}]}
 
 
 def _generate_plain(state: AgentState, model, attempts: int, block: str = "") -> str:
@@ -566,8 +586,8 @@ def _route_after_clarify(state: AgentState) -> str:
     return END if state.get("clarification") else "query_enhance"
 
 
-def _route_after_schema_recall(state: AgentState) -> str:
-    return "table_relation" if state.get("retrieved_tables") else END
+def _route_after_feasibility(state: AgentState) -> str:
+    return END if state.get("answer") else "planner"
 
 
 def _route_after_generate(state: AgentState) -> str:
@@ -617,6 +637,7 @@ def _build(*, checkpointer=None):
     g.add_node("query_enhance", _query_enhance)
     g.add_node("schema_recall", _schema_recall)
     g.add_node("table_relation", _table_relation)
+    g.add_node("feasibility_assessment", _feasibility_assessment)
     g.add_node("planner", _planner)
     g.add_node("plan_validate", _plan_validate)
     g.add_node("dispatch", _dispatch_step)
@@ -637,11 +658,13 @@ def _build(*, checkpointer=None):
     g.add_conditional_edges("clarify_check", _route_after_clarify,
                             {"query_enhance": "query_enhance", END: END})
     g.add_edge("query_enhance", "schema_recall")
-    # schema_recall (top-k retrieval, refuses on empty) -> table_relation (deterministic
-    # FK-edge join hints, zero LLM) -> planner:
-    g.add_conditional_edges("schema_recall", _route_after_schema_recall,
-                            {"table_relation": "table_relation", END: END})
-    g.add_edge("table_relation", "planner")
+    # schema_recall (top-k retrieval, pure -- never refuses) -> table_relation
+    # (deterministic FK-edge join hints, zero LLM) -> feasibility_assessment (the
+    # single deterministic refusal owner, including empty recall) -> planner:
+    g.add_edge("schema_recall", "table_relation")
+    g.add_edge("table_relation", "feasibility_assessment")
+    g.add_conditional_edges("feasibility_assessment", _route_after_feasibility,
+                            {"planner": "planner", END: END})
     g.add_edge("planner", "plan_validate")
     g.add_conditional_edges("plan_validate", _route_after_plan_validate,
                             {"dispatch": "dispatch", "planner": "planner", "respond": "respond"})
