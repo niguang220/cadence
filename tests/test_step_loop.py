@@ -1,6 +1,7 @@
 from agent.graph import run_agent
 import agent.graph as graph
 from agent.db.build_demo_db import build as build_demo_db
+from conftest import PlanningFakeModel
 
 
 class _ScriptModel:
@@ -205,3 +206,28 @@ def test_planner_feeds_the_validation_reason_back_on_replan():
     _planner(state)
     assert "unsupported plan shape" in m.prompt
     assert m.prompt.rstrip().endswith("JSON:")
+
+
+def test_greeting_refuses_at_intent_without_touching_schema(saas_db):
+    # a greeting is refused by the deterministic intent guard before any model call
+    # or schema retrieval -- the model must never even be invoked.
+    model = PlanningFakeModel("SELECT 1")
+    res = run_agent(saas_db, "hello", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "intent_recognition" in nodes
+    assert "retrieve_schema" not in nodes
+    assert model.calls == 0
+    intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
+    assert intent_trace.get("refused") is True
+    assert "database's data" in res.answer
+
+
+def test_normal_question_proceeds_past_intent(saas_db):
+    model = PlanningFakeModel("SELECT COUNT(*) FROM account")
+    res = run_agent(saas_db, "how many accounts?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "intent_recognition" in nodes
+    assert "retrieve_schema" in nodes
+    intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
+    assert intent_trace.get("intent_kind") == "data"
+    assert not intent_trace.get("refused")

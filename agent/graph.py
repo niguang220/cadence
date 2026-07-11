@@ -1,6 +1,7 @@
 """The agent as a LangGraph state machine (planner-driven step loop).
 
     preflight_context
+    -> intent_recognition --(out_of_scope)--> END (refuse)
     -> clarify_check
     -> retrieve_schema --(no tables)--> END (refuse)
     -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
@@ -54,6 +55,7 @@ from agent.generation import (AnswerResult, _extract_sql, _format_answer, _NO_QU
                              generate_sql)
 from agent.governance import check_result_governance, check_sql_governance
 from agent.hybrid_retriever import retrieve
+from agent.intent import classify_intent
 from agent.observability import setup_phoenix
 from agent.plan import deserialize_plan, serialize_plan, validate_plan
 from agent.planner import plan_query
@@ -133,6 +135,16 @@ def _preflight_context(state: AgentState) -> dict:
     if not state.get("hitl"):
         out["tables"] = tables
     return out
+
+
+def _intent_recognition(state: AgentState) -> dict:
+    v = classify_intent(state["question"])
+    if v.kind == "out_of_scope":
+        return {"answer": "I can only answer questions about this database's data.",
+                "result": ExecutionResult(False, error=_NO_QUERY),
+                "trace": [{"node": "intent_recognition", "intent_kind": v.kind,
+                           "reason": v.reason, "refused": True}]}
+    return {"trace": [{"node": "intent_recognition", "intent_kind": v.kind}]}
 
 
 def _clarify_check(state: AgentState) -> dict:
@@ -484,6 +496,10 @@ def _respond(state: AgentState) -> dict:
             "trace": [{"node": "respond", "python_analysis": True, "truncated": truncated}]}
 
 
+def _route_after_intent(state: AgentState) -> str:
+    return END if state.get("answer") else "clarify_check"
+
+
 def _route_after_clarify(state: AgentState) -> str:
     if state.get("answer"):
         return END
@@ -536,6 +552,7 @@ def _route_after_step_advance(state: AgentState) -> str:
 def _build(*, checkpointer=None):
     g = StateGraph(AgentState)
     g.add_node("preflight_context", _preflight_context)
+    g.add_node("intent_recognition", _intent_recognition)
     g.add_node("clarify_check", _clarify_check)
     g.add_node("retrieve_schema", _retrieve_schema)
     g.add_node("planner", _planner)
@@ -550,7 +567,9 @@ def _build(*, checkpointer=None):
     g.add_node("step_advance", _step_advance)
     g.add_node("respond", _respond)
     g.add_edge(START, "preflight_context")
-    g.add_edge("preflight_context", "clarify_check")
+    g.add_edge("preflight_context", "intent_recognition")
+    g.add_conditional_edges("intent_recognition", _route_after_intent,
+                            {"clarify_check": "clarify_check", END: END})
     g.add_conditional_edges("clarify_check", _route_after_clarify,
                             {"retrieve_schema": "retrieve_schema", END: END})
     # retrieve_schema now routes into the planner instead of generate_sql:
