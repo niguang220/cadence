@@ -97,6 +97,23 @@ Write a corrected single read-only query.
 SQL:"""
 
 
+# Pre-step rewrite that adds time/entity context so retrieval and generation are less
+# ambiguous. The HARD RULE keeps governed metric terms verbatim so their governed
+# definition still applies -- the rewrite adds context only, it must not redefine them.
+QUERY_ENHANCE_PROMPT = """Rewrite the question to be clearer for a SQL analyst: resolve \
+relative time ("this month" -> keep the phrase but make the intent explicit), expand \
+obvious abbreviations, and fold in any clarification already given. Add context only.
+
+HARD RULE: do NOT redefine or reinterpret these governed metric terms -- keep them \
+verbatim so their governed definition still applies: {governed_terms}
+
+Return ONLY a JSON object: {{"enhanced_question": "...", "rewrite_diff": "<what changed>", \
+"warnings": []}}
+
+Question: {question}
+JSON:"""
+
+
 PLANNER_PROMPT = """You plan how to answer a data question about a SQL database.
 Output a JSON array of steps. Each step is {{"kind": "sql"|"python", "instruction": "..."}}.
 

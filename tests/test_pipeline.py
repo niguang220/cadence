@@ -24,6 +24,11 @@ class FakeModel:
         self.last_prompt = prompt
         self.calls += 1
         text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on every proceed path; a passthrough
+        # (empty enhanced_question -> falls back to the original) leaves generation
+        # byte-identical, though ``calls`` still counts it.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self._reply})()
@@ -100,7 +105,7 @@ def test_pipeline_rejects_generated_pii_sql_without_repairing(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT email FROM customer LIMIT 5")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 2                            # planner + one generation (no repair)
+    assert model.calls == 3                            # enhance + planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     assert "couldn't answer" in res.answer.lower()
@@ -115,7 +120,7 @@ def test_pipeline_result_layer_governance_block_is_traced(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT 'redacted' AS email FROM customer LIMIT 1")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 2                            # planner + one generation (no repair)
+    assert model.calls == 3                            # enhance + planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     execute = next(t for t in res.trace if t["node"] == "execute")

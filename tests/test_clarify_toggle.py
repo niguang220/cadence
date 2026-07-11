@@ -15,6 +15,10 @@ ACTIVE_Q = "How many active users did we have as of 2025-06-30?"
 class Fake:
     def invoke(self, p):
         text = p if isinstance(p, str) else str(p)
+        # query_enhance runs first on the proceed path; a passthrough keeps generation
+        # byte-identical.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         # plan-aware: the first model call is the planner; yield one SQL step so
         # generation still runs and reaches generate_sql.
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:

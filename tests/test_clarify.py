@@ -24,6 +24,12 @@ class FakeModel:
     def invoke(self, prompt):
         self.last_prompt = prompt
         text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on the proceed path; a passthrough
+        # (empty enhanced_question -> falls back to the original) keeps generation
+        # byte-identical. On the ask/refuse paths enhance never runs (last_prompt stays
+        # the pre-enhance value), so the "never called the model" assertions still hold.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         # Plan-aware: the planner is the first model call under the step-loop graph;
         # a planner prompt yields a single SQL step so the configured SQL still drives
         # generation (last_prompt is thus the generation prompt, not the plan).

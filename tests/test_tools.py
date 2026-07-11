@@ -37,6 +37,10 @@ class FakeToolModel:
     def invoke(self, messages):
         self.calls += 1
         text = messages if isinstance(messages, str) else str(messages)
+        # query_enhance runs (string prompt) before the planner on every proceed path;
+        # a passthrough does NOT consume a scripted step, though ``calls`` counts it.
+        if "governed metric terms" in text:
+            return AIMessage(content='{"enhanced_question": ""}')
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return AIMessage(content='[{"kind": "sql", "instruction": "answer the question"}]')
         kind, payload = self._steps[min(self._step, len(self._steps) - 1)]
@@ -76,7 +80,7 @@ def test_model_calls_get_schema_then_writes_sql(tmp_path):
     res = answer_question(db, "how many track-supplier links exist?", model=model, tables=tables)
 
     assert res.execution.ok
-    assert model.calls == 3                            # planner, one tool round, then the SQL
+    assert model.calls == 4                            # enhance, planner, one tool round, then the SQL
     gen = next(t for t in res.trace if t["node"] == "generate_sql")
     assert "track_supplier" in gen.get("requested_tables", [])
 
@@ -91,7 +95,7 @@ def test_tool_path_still_self_corrects(tmp_path):
     )
     res = answer_question(db, "how many tracks are there?", model=model, tables=tables)
     assert res.execution.ok and res.execution.rows == [(306,)]
-    assert model.calls == 3                             # planner + draft + one repair
+    assert model.calls == 4                             # enhance + planner + draft + one repair
 
 
 def test_tool_call_then_self_correct(tmp_path):
@@ -106,7 +110,7 @@ def test_tool_call_then_self_correct(tmp_path):
     )
     res = answer_question(db, "how many track-supplier links exist?", model=model, tables=tables)
     assert res.execution.ok
-    assert model.calls == 4                              # planner + tool round + bad SQL + repair
+    assert model.calls == 5                              # enhance + planner + tool round + bad SQL + repair
     gen = [t for t in res.trace if t["node"] == "generate_sql"]
     assert len(gen) == 2 and "track_supplier" in gen[0].get("requested_tables", [])
 

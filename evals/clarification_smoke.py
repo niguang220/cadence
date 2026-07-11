@@ -35,6 +35,10 @@ class FakeModel:
         self.calls += 1
         self.last_prompt = prompt
         text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on the proceed path (including a HITL
+        # resume); a passthrough keeps generation byte-identical, though ``calls`` counts it.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self.sql})()
@@ -65,7 +69,8 @@ def run_smoke(db_path: str | Path) -> list[str]:
 
     result = resume_question_session(thread_id, "sales")
     _check(failures, result.execution.ok, "valid clarification should resume to execution")
-    _check(failures, model.calls == 2, "valid clarification should call model twice (planner + generation)")
+    _check(failures, model.calls == 3,
+           "valid clarification should call model three times (enhance + planner + generation)")
     _check(failures, "metric: total" in model.last_prompt, "typed intent should reach prompt")
     clarify_trace = next((t for t in result.trace if t.get("node") == "clarify_check" and t.get("resumed")), {})
     _check(failures, clarify_trace.get("intent_verdict") == "ok", "valid clarification intent should be ok")

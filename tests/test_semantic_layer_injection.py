@@ -32,6 +32,10 @@ class CapturingModel:
     def invoke(self, prompt):
         text = prompt if isinstance(prompt, str) else str(prompt)
         self.prompts.append(text)
+        # query_enhance runs first on the proceed path; a passthrough keeps generation
+        # byte-identical (the metric block is not in the enhance prompt).
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": "SELECT 1"})()
@@ -68,6 +72,10 @@ def test_semantic_block_persists_on_repair(tmp_path, monkeypatch):
         def invoke(self, p):
             text = p if isinstance(p,str) else str(p)
             self.prompts.append(text); self.n+=1
+            # query_enhance runs first on the proceed path; a passthrough must NOT
+            # advance _gen, else the enhance call would consume the failing draft.
+            if "governed metric terms" in text:
+                return type("R",(),{"content": '{"enhanced_question": ""}'})()
             if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
                 return type("R",(),{"content": '[{"kind": "sql", "instruction": "x"}]'})()
             self._gen += 1

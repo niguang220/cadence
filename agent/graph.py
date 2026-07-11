@@ -62,6 +62,7 @@ from agent.planner import plan_query
 from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
                            TOOL_SYSTEM_PROMPT)
 from agent.python_step import analyze_python_output, generate_python
+from agent.query_enhance import enhance_query
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
@@ -230,11 +231,42 @@ def _resolve_clarification_intent(
     }
 
 
+def _retrieval_question(state: AgentState) -> str:
+    """The question that drives schema recall, planning, and SQL generation.
+
+    query_enhance rewrites the question to add time/entity context; that enhanced form
+    is the retrieval/generation input. The ORIGINAL ``state["question"]`` is untouched
+    and stays the anchor for the answer, the trace, and semantic consistency. When the
+    enhancement is a no-op (empty or identical) this returns the original verbatim, so
+    the baseline stays byte-identical.
+    """
+    return state.get("enhanced_question") or state["question"]
+
+
+def _query_enhance(state: AgentState, config=None) -> dict:
+    """Pre-step LLM rewrite: add context for better retrieval/generation under a
+    governed-metric guardrail. Sets ``enhanced_question`` only -- never overwrites the
+    original ``question``. Gets the model like the other LLM nodes so a HITL resume
+    (checkpoint omits the model) still works."""
+    model = state.get("model") or _model_for_state(state, config)
+    if model is None:
+        raise RuntimeError("No model available for query enhancement")
+    result = enhance_query(state["question"], _semantic_metrics(state), model)
+    entry = {"node": "query_enhance",
+             "enhanced": result.enhanced_question != state["question"],
+             "rewrite_diff": result.rewrite_diff}
+    if result.governed_terms:
+        entry["governed_terms"] = result.governed_terms
+    if result.warnings:
+        entry["warnings"] = result.warnings
+    return {"enhanced_question": result.enhanced_question, "trace": [entry]}
+
+
 def _retrieve_schema(state: AgentState) -> dict:
     tables = state.get("tables")
     if tables is None:
         tables = introspect(state["db_path"])
-    top_k = retrieve(state["question"], tables, k=state.get("k", 5))
+    top_k = retrieve(_retrieval_question(state), tables, k=state.get("k", 5))
     if not top_k:
         # honest refusal: don't dump the whole schema and let the model
         # hallucinate a query for an off-topic question.
@@ -386,7 +418,7 @@ def _planner(state: AgentState, config=None) -> dict:
     block = ""
     if state.get("semantic_layer"):
         block = _metric_registry().format(_semantic_metrics(state))
-    plan = plan_query(state["question"], state["schema"], model, semantic_block=block,
+    plan = plan_query(_retrieval_question(state), state["schema"], model, semantic_block=block,
                       feedback=state.get("error") or "")   # replan with the reject reason
     attempts = state.get("plan_attempts", 0) + 1
     return {"plan": serialize_plan(plan), "plan_attempts": attempts, "step_index": 0,
@@ -411,14 +443,24 @@ def _sql_task(state: AgentState) -> str:
     overall question. Falls back to the question when there is no plan (direct callers).
     Keeping the question as the anchor and adding the instruction as context is the
     conservative fix; fully instruction-driven generation is a later refinement (it
-    needs real-model checking that the planner emits faithful SQL instructions)."""
+    needs real-model checking that the planner emits faithful SQL instructions).
+
+    SQL generation gets BOTH the original question and the enhanced rewrite (the metric
+    block is threaded separately) so the governed intent and the added time/entity
+    context both reach generation. When the enhancement is a no-op (empty or identical)
+    the base is the original question verbatim, so the non-enhanced baseline stays
+    byte-identical."""
+    question = state["question"]
+    enhanced = state.get("enhanced_question")
+    base = (f"{question}\n\nEnhanced for retrieval: {enhanced}"
+            if enhanced and enhanced != question else question)
     plan = state.get("plan")
     if not plan:
-        return state["question"]
+        return base
     instruction = (plan[state.get("step_index", 0)] or {}).get("instruction", "")
     if instruction.strip():
-        return f"{state['question']}\n\nFor this step: {instruction}"
-    return state["question"]
+        return f"{base}\n\nFor this step: {instruction}"
+    return base
 
 
 def _dispatch_step(state: AgentState) -> dict:
@@ -503,7 +545,7 @@ def _route_after_intent(state: AgentState) -> str:
 def _route_after_clarify(state: AgentState) -> str:
     if state.get("answer"):
         return END
-    return END if state.get("clarification") else "retrieve_schema"
+    return END if state.get("clarification") else "query_enhance"
 
 
 def _route_after_retrieve(state: AgentState) -> str:
@@ -554,6 +596,7 @@ def _build(*, checkpointer=None):
     g.add_node("preflight_context", _preflight_context)
     g.add_node("intent_recognition", _intent_recognition)
     g.add_node("clarify_check", _clarify_check)
+    g.add_node("query_enhance", _query_enhance)
     g.add_node("retrieve_schema", _retrieve_schema)
     g.add_node("planner", _planner)
     g.add_node("plan_validate", _plan_validate)
@@ -570,8 +613,11 @@ def _build(*, checkpointer=None):
     g.add_edge("preflight_context", "intent_recognition")
     g.add_conditional_edges("intent_recognition", _route_after_intent,
                             {"clarify_check": "clarify_check", END: END})
+    # query_enhance runs ONLY on the proceed path (a clarification/intent refusal never
+    # reaches it): rewrite the question for retrieval/generation, then recall schema.
     g.add_conditional_edges("clarify_check", _route_after_clarify,
-                            {"retrieve_schema": "retrieve_schema", END: END})
+                            {"query_enhance": "query_enhance", END: END})
+    g.add_edge("query_enhance", "retrieve_schema")
     # retrieve_schema now routes into the planner instead of generate_sql:
     g.add_conditional_edges("retrieve_schema", _route_after_retrieve,
                             {"planner": "planner", END: END})

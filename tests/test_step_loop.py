@@ -8,7 +8,12 @@ class _ScriptModel:
     """Returns queued responses in order; the LAST response is sticky (repeats), so a
     'bad SQL forever' test can exhaust the repair budget without counting attempts."""
     def __init__(self, *responses): self._q = list(responses)
-    def invoke(self, _prompt):
+    def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs first on every proceed path; a passthrough must NOT
+        # consume a queued response, else the enhance call would eat the plan.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         content = self._q.pop(0) if len(self._q) > 1 else self._q[0]
         return type("R", (), {"content": content})()
     def bind(self, **_): return self

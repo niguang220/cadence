@@ -29,6 +29,7 @@ class AgentState(TypedDict, total=False):
     thread_id: str                   # HITL session id; used to recover non-serializable runtime objects
 
     # working set
+    enhanced_question: str           # query_enhance's rewrite; feeds retrieval/planner/SQL gen (original kept for the answer/trace)
     retrieved_tables: list[str]
     semantic_metrics: list[dict[str, Any]]  # serializable governed metrics bound in preflight
     clarification_options: list[dict[str, Any]]

@@ -4,8 +4,14 @@ from agent.graph import run_agent
 class _ScriptModel:
     def __init__(self, *r): self._q = list(r)
     def invoke(self, _p):
+        text = _p if isinstance(_p, str) else str(_p)
         class R: pass
-        x = R(); x.content = self._q.pop(0); return x
+        x = R()
+        # query_enhance runs first on every proceed path; a passthrough must NOT pop
+        # a queued response, else the enhance call would eat the plan.
+        if "governed metric terms" in text:
+            x.content = '{"enhanced_question": ""}'; return x
+        x.content = self._q.pop(0); return x
     def bind(self, **_): return self
 
 def test_two_step_plan_produces_analysis(saas_db, monkeypatch):
