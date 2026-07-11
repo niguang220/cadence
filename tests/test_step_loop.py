@@ -126,3 +126,23 @@ def test_governed_sql_result_never_dispatches_python(tmp_path, monkeypatch):
     assert "python_generate" not in nodes                # python step never dispatched
     assert "python_analyze" not in nodes
     assert "governance violation" in res.answer           # refused via the governance gate
+
+
+def test_respond_flags_truncation_when_python_ran_on_truncated_rows():
+    # teeth: a Python analysis computed on a truncated SQL result must not be presented
+    # as if it were complete -- the answer says so.
+    from agent.graph import _respond
+    from agent.execution import ExecutionResult
+    state = {"result": ExecutionResult(True, columns=["x"], rows=[(1,)], truncated=True),
+             "tables": [], "python_analysis": {"analysis": "trend up"}}
+    out = _respond(state)
+    assert "trend up" in out["answer"]
+    assert "truncat" in out["answer"].lower()
+
+def test_respond_adds_no_truncation_note_when_result_is_complete():
+    from agent.graph import _respond
+    from agent.execution import ExecutionResult
+    state = {"result": ExecutionResult(True, columns=["x"], rows=[(1,)], truncated=False),
+             "tables": [], "python_analysis": {"analysis": "trend up"}}
+    out = _respond(state)
+    assert "truncat" not in out["answer"].lower()

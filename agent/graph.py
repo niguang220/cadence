@@ -414,7 +414,11 @@ def _python_generate(state: AgentState, config=None) -> dict:
 
 def _python_execute(state: AgentState) -> dict:
     prior = state["result"]
-    payload = {"columns": prior.columns, "rows": [list(r) for r in prior.rows]}
+    # `truncated` tells the analysis code (and, via _respond, the user) that these rows
+    # are only the first max_rows of a larger result -- so the analysis isn't silently
+    # computed on a partial sample.
+    payload = {"columns": prior.columns, "rows": [list(r) for r in prior.rows],
+               "truncated": prior.truncated}
     sandbox = run_in_sandbox(state["python_code"], payload)
     return {"python_analysis": {"_sandbox_ok": sandbox.ok, "stdout": sandbox.stdout,
                                 "stderr": sandbox.stderr, "error": sandbox.error},
@@ -458,8 +462,13 @@ def _respond(state: AgentState) -> dict:
     if "python_analysis" not in state:                  # SQL-only: answer AND trace unchanged
         return {"answer": answer, "trace": [{"node": "respond"}]}
     analysis = (state.get("python_analysis") or {}).get("analysis")   # a Python step ran
-    return {"answer": f"{answer}\nAnalysis: {analysis}",
-            "trace": [{"node": "respond", "python_analysis": True}]}
+    answer = f"{answer}\nAnalysis: {analysis}"
+    truncated = state["result"].truncated
+    if truncated:                                       # be honest: analysis on a sample
+        answer += (f"\n(Note: this analysis is based on the first {len(state['result'].rows)} "
+                   "rows; the query result was truncated.)")
+    return {"answer": answer,
+            "trace": [{"node": "respond", "python_analysis": True, "truncated": truncated}]}
 
 
 def _route_after_clarify(state: AgentState) -> str:
