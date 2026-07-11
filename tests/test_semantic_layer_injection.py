@@ -1,5 +1,5 @@
 import agent.graph as graphmod
-from agent.pipeline import answer_question, start_question_session
+from agent.pipeline import answer_question, resume_question_session, start_question_session
 from agent.db.build_saas_db import build
 from agent.semantic_layer import format_metrics, load_metrics
 
@@ -91,13 +91,18 @@ def test_hitl_checkpoint_keeps_semantic_metrics_serializable(tmp_path, monkeypat
     registry = _only_mrr_registry()
     monkeypatch.setattr(graphmod, "_metric_registry", lambda: registry)
     db = str(build(tmp_path / "saas.db"))
-    thread_id, value = start_question_session(
+    thread_id, first = start_question_session(
         db,
         "who are the best accounts?",
         model=CapturingModel(),
         semantic_layer=True,
     )
     assert thread_id
+    # The semantic layer suppresses clarification, so the FIRST HITL pause is plan
+    # approval; approve to run the plan to completion. This also exercises the metric
+    # serialization across the checkpoint boundary, which is the point of this test.
+    assert isinstance(first, dict) and first.get("plan")
+    _, value = resume_question_session(thread_id, {"decision": "approve"})
     assert not isinstance(value, dict)
     assert registry.retrieve_calls == 1
     preflight = next(t for t in value.trace if t["node"] == "preflight_context")

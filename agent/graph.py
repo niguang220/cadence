@@ -8,6 +8,8 @@
     -> feasibility_assessment --(no_recalled_tables)--> END (refuse)
     -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
                               \\--(invalid & exhausted)------> respond (refuse)
+    -> plan_approval (HITL only; non-HITL skips straight to dispatch):
+         approve/valid-edit --> dispatch ;  reject/bounded-invalid-edit --> respond (refuse)
     -> dispatch (reads plan[step_index].kind):
          "sql"    -> generate_sql --(CANNOT_ANSWER)--> END (decline)
                      -> execute -> validate --(ok)-----------> step_advance
@@ -76,6 +78,7 @@ from agent.validate import validate_result
 MAX_ATTEMPTS = 3            # total generations (1 draft + up to 2 repairs)
 MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refuses
 MAX_PYTHON_ATTEMPTS = 3     # python-step retries before the graph gives up and refuses
+MAX_APPROVAL_ATTEMPTS = 2   # human plan-edit rounds before a still-invalid edit is refused
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
@@ -470,6 +473,83 @@ def _plan_validate(state: AgentState) -> dict:
             "trace": [{"node": "plan_validate", "ok": v.ok, "reason": v.reason}]}
 
 
+def _refuse_plan(decision: str, reason: str, attempts: int) -> dict:
+    """Terminal plan-approval refusal (an explicit reject, or a still-invalid edit past
+    the budget): a declined result plus its trace. respond surfaces the decline sentence
+    verbatim (it is already decided) instead of reformatting the empty result."""
+    return {
+        "answer": "I won't run this plan.",
+        "result": ExecutionResult(False, error=_NO_QUERY),
+        "approval_attempts": attempts,
+        "approval_result": {"decision": decision, "reason": reason, "attempts": attempts,
+                            "refused": True},
+        "trace": [{"node": "plan_approval", "decision": decision, "refused": True,
+                   "reason": reason, "attempts": attempts}],
+    }
+
+
+def _plan_approval(state: AgentState) -> dict:
+    """HITL gate AFTER plan_validate: pause with an EDITABLE plan and let a human
+    approve / edit / reject before anything executes. Reached ONLY in HITL -- a
+    non-HITL run routes plan_validate straight to dispatch, so the baseline is
+    byte-identical. Deterministic (validate_plan + assess_feasibility), so it needs
+    no model.
+
+    An EDIT is never trusted just because the original plan passed: it is re-validated
+    with ``validate_plan`` (shape + non-empty instructions) and then ``assess_feasibility``
+    (a defensive consistency check -- recall/paths are unchanged by a plan edit, so it
+    passes in practice; a structurally-valid-but-semantically-off edit is NOT gated here,
+    it surfaces downstream). Resume value is a dict:
+    ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}``.
+
+    Bounded (Critical): a still-invalid edit re-interrupts with the reason, but only up to
+    ``MAX_APPROVAL_ATTEMPTS`` edit rounds -- once the budget is spent a still-invalid edit
+    is REFUSED, so there is no infinite human ping-pong. The loop calls ``interrupt`` once
+    per round; on resume LangGraph re-executes the node from the top and replays the
+    earlier resume values positionally, so ``attempts`` reconstructs deterministically.
+    Termination is provable: approve / reject / an accepted edit all return, and the only
+    path that loops is a still-invalid edit, which strictly increments ``attempts`` and is
+    refused once ``attempts >= MAX_APPROVAL_ATTEMPTS``."""
+    plan = state["plan"]
+    reason = ""
+    attempts = 0
+    while True:
+        payload = {"plan": plan, "message": "Approve, edit, or reject this plan."}
+        if reason:
+            payload["reason"] = reason
+        decision = interrupt(payload) or {}
+        action = decision.get("decision")
+        if action == "approve":
+            return {"plan": plan, "approval_attempts": attempts,
+                    "approval_result": {"decision": "approve", "attempts": attempts},
+                    "trace": [{"node": "plan_approval", "decision": "approve",
+                               "approved": True, "attempts": attempts}]}
+        if action == "reject":
+            return _refuse_plan("reject", "rejected by the reviewer", attempts)
+        # anything else is treated as an edit to re-validate (never trusted blindly)
+        attempts += 1
+        try:
+            edited = deserialize_plan(decision.get("plan", []))
+            verdict = validate_plan(edited)         # shape + non-empty instructions
+            reason = "" if verdict.ok else verdict.reason
+        except (TypeError, ValueError):             # a malformed edit (bad step dict shape)
+            edited, reason = None, "edit is not a well-formed plan"
+        if not reason and edited is not None:
+            f = assess_feasibility(state["question"], state["tables"],
+                                   state["retrieved_tables"], _semantic_metrics(state),
+                                   state.get("join_paths", []))
+            if not f.feasible:
+                reason = f.message
+            else:                                   # accepted edit: persist it, then dispatch
+                return {"plan": serialize_plan(edited), "approval_attempts": attempts,
+                        "approval_result": {"decision": "edit", "attempts": attempts},
+                        "trace": [{"node": "plan_approval", "decision": "edit",
+                                   "approved": True, "attempts": attempts}]}
+        if attempts >= MAX_APPROVAL_ATTEMPTS:       # bounded: stop the human ping-pong
+            return _refuse_plan("edit", reason, attempts)
+        # else: loop -> interrupt() again, now carrying `reason`
+
+
 def _current_step(state: AgentState) -> dict:
     return state["plan"][state["step_index"]]
 
@@ -557,6 +637,13 @@ def _respond(state: AgentState) -> dict:
     if state.get("error"):                              # exhausted the repair budget
         return {"answer": f"I couldn't answer that reliably: {state['error']}.",
                 "trace": [{"node": "respond", "refused": True, "error": state["error"]}]}
+    result = state.get("result")
+    if state.get("answer") and result is not None and not result.ok:
+        # An already-decided refusal (only plan_approval reject / bounded invalid edit
+        # reaches respond in this state): surface its decline sentence verbatim rather
+        # than reformatting the empty result. Every other respond path has either a
+        # successful result or `error` set, so this is byte-identical for the baseline.
+        return {"answer": state["answer"], "trace": [{"node": "respond", "refused": True}]}
     governance = check_result_governance(state["result"].columns, state["tables"])
     if not governance.ok:
         return {"answer": f"I couldn't answer that reliably: {governance.reason}.",
@@ -597,10 +684,18 @@ def _route_after_generate(state: AgentState) -> str:
 
 def _route_after_plan_validate(state: AgentState) -> str:
     if not state.get("error"):
-        return "dispatch"
+        # In HITL, pause for human plan approval before executing; non-HITL skips the
+        # node entirely (routes straight to dispatch) so the baseline is byte-identical.
+        return "plan_approval" if state.get("hitl") else "dispatch"
     if state.get("plan_attempts", 0) >= MAX_PLAN_ATTEMPTS:   # bounded: give up and refuse
         return "respond"
     return "planner"                                         # replan with a fresh attempt
+
+
+def _route_after_plan_approval(state: AgentState) -> str:
+    # refuse (reject / bounded invalid edit) marks approval_result refused -> respond
+    # surfaces the decline; approve / accepted-edit proceed to execute the plan.
+    return "respond" if state.get("approval_result", {}).get("refused") else "dispatch"
 
 
 def _route_dispatch(state: AgentState) -> str:
@@ -640,6 +735,7 @@ def _build(*, checkpointer=None):
     g.add_node("feasibility_assessment", _feasibility_assessment)
     g.add_node("planner", _planner)
     g.add_node("plan_validate", _plan_validate)
+    g.add_node("plan_approval", _plan_approval)
     g.add_node("dispatch", _dispatch_step)
     g.add_node("generate_sql", _generate_sql)
     g.add_node("execute", _execute)
@@ -666,8 +762,13 @@ def _build(*, checkpointer=None):
     g.add_conditional_edges("feasibility_assessment", _route_after_feasibility,
                             {"planner": "planner", END: END})
     g.add_edge("planner", "plan_validate")
+    # A valid plan routes to plan_approval in HITL (human approve/edit/reject), else
+    # straight to dispatch; an invalid plan replans (bounded) or refuses.
     g.add_conditional_edges("plan_validate", _route_after_plan_validate,
-                            {"dispatch": "dispatch", "planner": "planner", "respond": "respond"})
+                            {"dispatch": "dispatch", "plan_approval": "plan_approval",
+                             "planner": "planner", "respond": "respond"})
+    g.add_conditional_edges("plan_approval", _route_after_plan_approval,
+                            {"dispatch": "dispatch", "respond": "respond"})
     g.add_conditional_edges("dispatch", _route_dispatch,
                             {"generate_sql": "generate_sql", "python_generate": "python_generate"})
     # generate_sql keeps its decline short-circuit EXPLICITLY: on CANNOT_ANSWER it sets
@@ -774,10 +875,21 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
     return thread_id, _to_answer(out, usage)
 
 
-def resume_agent_session(thread_id: str, clarification_response: str) -> AnswerResult:
-    """Resume a HITL run that paused in ``clarify_check``."""
+def resume_agent_session(thread_id: str, response) -> tuple[str, AnswerResult | dict]:
+    """Resume a paused HITL run with the human's ``response``.
+
+    ``response`` is a clarification string (for a ``clarify_check`` pause) or a
+    plan-approval dict ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}`` (for a
+    ``plan_approval`` pause). Mirrors ``start_agent_session``: returns ``(thread_id,
+    value)``. If the run pauses AGAIN -- a clarification resume flowing into plan
+    approval, or an invalid plan edit re-interrupting -- ``value`` is the next interrupt
+    payload and the thread's model is KEPT alive for the continuing run. Only on
+    completion is the model dropped and ``value`` an ``AnswerResult``."""
     usage = UsageCallback()
-    final = _HITL_AGENT.invoke(Command(resume=clarification_response),
-                               config=_config(callbacks=[usage], thread_id=thread_id))
+    out = _HITL_AGENT.invoke(Command(resume=response),
+                             config=_config(callbacks=[usage], thread_id=thread_id))
+    interrupts = out.get("__interrupt__") if isinstance(out, dict) else None
+    if interrupts:
+        return thread_id, interrupts[0].value
     _HITL_MODELS.pop(thread_id, None)
-    return _to_answer(final, usage)
+    return thread_id, _to_answer(out, usage)

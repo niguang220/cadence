@@ -190,7 +190,11 @@ def test_hitl_clarification_resumes_with_user_metric(tmp_path):
     assert first["question"] == "who are the best customers?"
     assert model.last_prompt is None
 
-    result = resume_question_session(thread_id, "sales")
+    _, mid = resume_question_session(thread_id, "sales")
+    # HITL now interrupts a SECOND time for plan approval after the clarification is
+    # resolved; approve the (unchanged) plan to run it to completion.
+    assert isinstance(mid, dict) and mid.get("plan")
+    _, result = resume_question_session(thread_id, {"decision": "approve"})
 
     assert result.clarification is None
     assert result.execution.ok
@@ -215,7 +219,7 @@ def test_invalid_hitl_clarification_refuses_without_guessing(tmp_path):
     thread_id, first = start_question_session(db, "who are the best customers?", model=model)
     assert isinstance(first, dict)
 
-    result = resume_question_session(thread_id, "profit")
+    _, result = resume_question_session(thread_id, "profit")
 
     assert not result.execution.ok
     assert "couldn't map that clarification" in result.answer.lower()

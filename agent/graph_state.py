@@ -53,6 +53,10 @@ class AgentState(TypedDict, total=False):
     python_attempts: int             # python-step retries (bounded)
     python_analysis: dict            # parsed sandbox output for the current python step
 
+    # plan-approval HITL (Plan 3)
+    approval_attempts: int           # human plan-edit rounds spent (bounded by MAX_APPROVAL_ATTEMPTS)
+    approval_result: dict            # plan_approval outcome (decision/reason) for the trace
+
     # outputs
     answer: str
     assumptions: list[str]

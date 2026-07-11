@@ -114,7 +114,9 @@ def test_hitl_resume_flows_through_query_enhance(tmp_path):
     thread_id, first = start_question_session(db, "who are the best customers?", model=model)
     assert isinstance(first, dict)                     # paused for clarification; enhance not yet run
     assert not model.saw_enhance
-    result = resume_question_session(thread_id, "sales")   # resumes THROUGH query_enhance
+    _, mid = resume_question_session(thread_id, "sales")   # resumes THROUGH query_enhance
+    assert isinstance(mid, dict)                        # HITL pauses again for plan approval
+    assert model.saw_enhance                            # enhance ran on the HITL resume path
+    _, result = resume_question_session(thread_id, {"decision": "approve"})
     assert result.execution.ok                         # no KeyError getting the model on resume
-    assert model.saw_enhance                           # enhance ran on the HITL resume path
     assert any(t.get("node") == "query_enhance" for t in result.trace)

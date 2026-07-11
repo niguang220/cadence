@@ -62,8 +62,15 @@ def start_question_session(
         semantic_layer=semantic_layer, threshold=threshold, thread_id=thread_id)
 
 
-def resume_question_session(thread_id: str, clarification_response: str) -> AnswerResult:
-    """Resume a LangGraph HITL run that paused to ask a clarification."""
+def resume_question_session(thread_id: str, response) -> tuple[str, AnswerResult | dict]:
+    """Resume a LangGraph HITL run that paused for a clarification or plan approval.
+
+    ``response`` is the human's reply -- a clarification string, or a plan-approval dict
+    ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}``. Returns ``(thread_id,
+    value)`` like ``start_question_session``: an ``AnswerResult`` when the run completes,
+    or the next interrupt payload if it pauses again (e.g. a clarification resume flowing
+    into plan approval, or an invalid plan edit re-interrupting).
+    """
     from agent.graph import resume_agent_session
 
-    return resume_agent_session(thread_id, clarification_response)
+    return resume_agent_session(thread_id, response)
