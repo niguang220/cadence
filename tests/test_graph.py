@@ -26,11 +26,18 @@ class SequenceModel:
         self.prompts: list[str] = []
         self.calls = 0
         self._gen = 0
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch prompts/calls/_gen) so it can't shift the scripted
+        # sequence or the ``calls`` count. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.prompts.append(prompt)
         self.calls += 1
-        text = prompt if isinstance(prompt, str) else str(prompt)
         # query_enhance runs before the planner on every proceed path; a passthrough
         # (empty enhanced_question -> falls back to the original) does NOT consume a
         # scripted SQL reply, though ``calls`` still counts it.

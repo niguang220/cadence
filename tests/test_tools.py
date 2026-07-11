@@ -26,6 +26,7 @@ class FakeToolModel:
         self._steps = list(steps)
         self.calls = 0
         self._step = 0
+        self.saw_consistency = False
 
     def bind_tools(self, tools):
         self.tools = tools
@@ -35,8 +36,14 @@ class FakeToolModel:
         return self
 
     def invoke(self, messages):
-        self.calls += 1
         text = messages if isinstance(messages, str) else str(messages)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch calls/_step) so it can't shift the scripted
+        # tool/sql sequence or the ``calls`` count. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return AIMessage(content='{"ok": true}')
+        self.calls += 1
         # query_enhance runs (string prompt) before the planner on every proceed path;
         # a passthrough does NOT consume a scripted step, though ``calls`` counts it.
         if "governed metric terms" in text:

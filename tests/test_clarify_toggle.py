@@ -13,8 +13,15 @@ ACTIVE_Q = "How many active users did we have as of 2025-06-30?"
 
 
 class Fake:
+    saw_consistency = False
     def invoke(self, p):
         text = p if isinstance(p, str) else str(p)
+        # semantic_consistency is the LAST model call on a validated SQL step; recognize
+        # it as a pure SIDE-CHANNEL passthrough (keeps this fake robust if its SQL ever
+        # reaches the validate-ok path).
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         # query_enhance runs first on the proceed path; a passthrough keeps generation
         # byte-identical.
         if "governed metric terms" in text:

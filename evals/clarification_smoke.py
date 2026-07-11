@@ -30,11 +30,18 @@ class FakeModel:
         self.sql = sql
         self.calls = 0
         self.last_prompt = ""
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch calls/last_prompt) so it can't shift the call
+        # count or overwrite the generation prompt. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.calls += 1
         self.last_prompt = prompt
-        text = prompt if isinstance(prompt, str) else str(prompt)
         # query_enhance runs before the planner on the proceed path (including a HITL
         # resume); a passthrough keeps generation byte-identical, though ``calls`` counts it.
         if "governed metric terms" in text:

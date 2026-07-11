@@ -7,9 +7,17 @@ from conftest import PlanningFakeModel
 class _ScriptModel:
     """Returns queued responses in order; the LAST response is sticky (repeats), so a
     'bad SQL forever' test can exhaust the repair budget without counting attempts."""
-    def __init__(self, *responses): self._q = list(responses)
+    def __init__(self, *responses):
+        self._q = list(responses)
+        self.saw_consistency = False
     def invoke(self, prompt):
         text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL that must NOT pop a queued response, else it would eat the next
+        # scripted SQL/python reply. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         # query_enhance runs first on every proceed path; a passthrough must NOT
         # consume a queued response, else the enhance call would eat the plan.
         if "governed metric terms" in text:

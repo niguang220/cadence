@@ -70,6 +70,7 @@ from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
 from agent.schema_relations import join_paths
+from agent.semantic_consistency import check_semantic_consistency
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
 from agent.usage import UsageCallback
@@ -454,6 +455,38 @@ def _validate(state: AgentState) -> dict:
     }
 
 
+def _semantic_consistency(state: AgentState, config=None) -> dict:
+    """Post-generation LLM check on a validated SQL step: does the SQL (and its rows)
+    answer the QUESTION's intent (measure/entity/grain)? Runs ONLY on the validate-OK
+    path (execute -> validate --(ok)--> here -> step_advance), BEFORE any Python step
+    consumes the rows. A governance_block / exec error / structural repair sets ``error``
+    and is routed away by ``_route_after_sql_validate`` on the error branch, so a
+    governed/blocked result NEVER reaches this judge -- Plan 2's governance invariant.
+
+    Judges the ORIGINAL ``state["question"]`` (the intent anchor), never the enhanced
+    rewrite (judging against the rewrite would be circular). A confident ``not ok`` feeds
+    ``repair_hint`` back as the repair problem via the SHARED ``attempts`` budget; on a
+    parse-failure verdict it fails open (ok) so a broken judge can't block a good query.
+
+    Gets the model like the other LLM nodes so a HITL plan-approval resume (the checkpoint
+    omits the model) still reaches a working judge."""
+    model = state.get("model") or _model_for_state(state, config)
+    if model is None:
+        raise RuntimeError("No model available for semantic consistency")
+    v = check_semantic_consistency(state["question"], state["sql"], state["result"], model)
+    if v.ok:
+        return {"error": None, "trace": [{"node": "semantic_consistency", "ok": True}]}
+    # An explicit not-ok verdict must ALWAYS be a non-empty repair signal: an empty
+    # repair_hint is falsy, and `_route_after_semantic_consistency` routes on `error`
+    # truthiness -- an unguarded empty string would silently step_advance a judge-flagged
+    # mismatch. Default the ROUTED error only; the trace below keeps the real (possibly
+    # empty) repair_hint for observability.
+    error = v.repair_hint or "the result does not match the question's intent"
+    return {"error": error, "repair_kind": "semantic_mismatch",
+            "trace": [{"node": "semantic_consistency", "ok": False,
+                       "mismatch_kind": v.mismatch_kind, "repair_hint": v.repair_hint}]}
+
+
 def _planner(state: AgentState, config=None) -> dict:
     model = state.get("model") or _model_for_state(state, config)
     block = ""
@@ -703,13 +736,24 @@ def _route_dispatch(state: AgentState) -> str:
 
 
 def _route_after_sql_validate(state: AgentState) -> str:
+    # ok path now runs the semantic-consistency judge FIRST (before step_advance); the
+    # error branches are UNTOUCHED so a governance_block / exec error / structural repair
+    # NEVER reaches the judge -- Plan 2's governance invariant holds structurally.
     if not state.get("error"):
-        return "step_advance"
+        return "semantic_consistency"
     if state.get("repair_kind") == "governance_block":
         return "respond"
     if state.get("attempts", 0) >= MAX_ATTEMPTS:       # bounded: give up and refuse
         return "respond"
     return "generate_sql"                              # repair: re-enter with the hint
+
+
+def _route_after_semantic_consistency(state: AgentState) -> str:
+    if not state.get("error"):                         # ok verdict -> proceed
+        return "step_advance"
+    if state.get("attempts", 0) >= MAX_ATTEMPTS:       # exhausted with a KNOWN mismatch:
+        return "respond"                               # REFUSE (must not reach Python/answer)
+    return "generate_sql"                              # repair, reusing the shared budget
 
 
 def _route_after_python_analyze(state: AgentState) -> str:
@@ -740,6 +784,7 @@ def _build(*, checkpointer=None):
     g.add_node("generate_sql", _generate_sql)
     g.add_node("execute", _execute)
     g.add_node("validate", _validate)
+    g.add_node("semantic_consistency", _semantic_consistency)
     g.add_node("python_generate", _python_generate)
     g.add_node("python_execute", _python_execute)
     g.add_node("python_analyze", _python_analyze)
@@ -776,8 +821,15 @@ def _build(*, checkpointer=None):
     g.add_conditional_edges("generate_sql", _route_after_generate,
                             {"execute": "execute", END: END})
     g.add_edge("execute", "validate")
-    # SQL step tail: validate now advances the step instead of responding
+    # SQL step tail: a validated (ok) result flows through the semantic-consistency judge
+    # before step_advance; the error branches (governance_block / exhausted / repair) route
+    # exactly as before and never reach the judge.
     g.add_conditional_edges("validate", _route_after_sql_validate,
+                            {"semantic_consistency": "semantic_consistency",
+                             "generate_sql": "generate_sql", "respond": "respond"})
+    # judge tail: ok -> advance; a confident mismatch repairs (shared budget) or, once the
+    # budget is spent, REFUSES (respond) -- a known semantic error must not reach Python.
+    g.add_conditional_edges("semantic_consistency", _route_after_semantic_consistency,
                             {"step_advance": "step_advance", "generate_sql": "generate_sql",
                              "respond": "respond"})
     g.add_edge("python_generate", "python_execute")

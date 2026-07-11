@@ -2,11 +2,19 @@ import agent.graph as graph
 from agent.graph import run_agent
 
 class _ScriptModel:
-    def __init__(self, *r): self._q = list(r)
+    def __init__(self, *r):
+        self._q = list(r)
+        self.saw_consistency = False
     def invoke(self, _p):
         text = _p if isinstance(_p, str) else str(_p)
         class R: pass
         x = R()
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL that must NOT pop a queued response, else it would eat the next
+        # scripted reply. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            x.content = '{"ok": true}'; return x
         # query_enhance runs first on every proceed path; a passthrough must NOT pop
         # a queued response, else the enhance call would eat the plan.
         if "governed metric terms" in text:
