@@ -175,6 +175,22 @@ def test_sql_generation_falls_back_to_question_without_a_plan():
     _generate_plain({"question": "how many tracks?", "schema": "S"}, m, 0)
     assert "how many tracks?" in m.prompt
 
+def test_sql_repair_round_keeps_the_planner_step_instruction():
+    # teeth: the repair round must also carry the step instruction, or self-correction
+    # drifts back toward the original question instead of the SQL step's task.
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    state = {"question": "plot the mrr trend", "schema": "S",
+             "sql": "SELECT bad", "error": "no such column: bad",
+             "plan": [{"kind": "sql", "instruction": "pull monthly mrr rows"}],
+             "step_index": 0}
+    _generate_plain(state, m, attempts=1)                # repair round
+    assert "pull monthly mrr rows" in m.prompt
+
 def test_planner_feeds_the_validation_reason_back_on_replan():
     # teeth: a rejected plan's reason must reach the planner so replanning isn't blind;
     # the recognition marker ("JSON:" ending) must survive so fakes still route.

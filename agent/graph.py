@@ -247,7 +247,7 @@ def _generate_plain(state: AgentState, model, attempts: int, block: str = "") ->
         return generate_sql(_sql_task(state), state["schema"], model,
                            semantic_block=block)
     prompt = REPAIR_PROMPT.format(
-        schema=state["schema"], question=state["question"],
+        schema=state["schema"], question=_sql_task(state),
         failed_sql=state.get("sql", ""), problem=state.get("error", ""),
         semantic_block=block,
     )
@@ -274,7 +274,7 @@ def _generate_with_tools(state: AgentState, model, attempts: int, requested: lis
         human = _sql_task(state)
     else:
         human = REPAIR_INSTRUCTION.format(
-            question=state["question"], failed_sql=state.get("sql", ""),
+            question=_sql_task(state), failed_sql=state.get("sql", ""),
             problem=state.get("error", ""), semantic_block=block)
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
 
