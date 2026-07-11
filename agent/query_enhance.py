@@ -30,10 +30,15 @@ def enhance_query(question: str, metrics: list[MetricDef], model) -> EnhanceResu
         return EnhanceResult(question, governed_terms=governed)   # safe fallback
     enhanced = str(data.get("enhanced_question") or question)
     warnings = [str(w) for w in data.get("warnings", []) if w]
-    # guardrail: if the rewrite DROPPED a governed term, do not use the lossy rewrite --
-    # fall back to the original question so the governed definition still applies.
-    dropped = [t for t in governed
-               if t.lower() in question.lower() and t.lower() not in enhanced.lower()]
+    # guardrail: a metric is "dropped" if ANY of its surface forms (canonical name OR an
+    # alias) was in the question but NONE survives in the rewrite. Aliases matter -- real
+    # configs rely on them, and a question often hits an alias, not the canonical name.
+    dropped = []
+    for met in metrics:
+        forms = [met.name, *met.aliases]
+        if (any(f.lower() in question.lower() for f in forms)
+                and not any(f.lower() in enhanced.lower() for f in forms)):
+            dropped.append(met.name)
     if dropped:
         warnings.append(f"rewrite dropped governed term(s) {dropped}; kept original")
         enhanced = question

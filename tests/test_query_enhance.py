@@ -22,10 +22,10 @@ class _Fake:
         return self
 
 
-# The real MetricDef has 7 required fields; enhance_query only reads ``name``, so the
-# extra fields are valid placeholders. Keep the assertions as specified in the brief.
-def _metric(name):
-    return MetricDef(name, [], "logged in >=1", "count", "user", [], "")
+# The real MetricDef has 7 required fields; enhance_query only reads ``name`` and
+# ``aliases`` (the guardrail), so the extra fields are valid placeholders.
+def _metric(name, aliases=()):
+    return MetricDef(name, list(aliases), "logged in >=1", "count", "user", [], "")
 
 
 # --- unit: enhance_query -------------------------------------------------------
@@ -43,6 +43,16 @@ def test_enhance_falls_back_to_original_when_governed_term_dropped():
     m = _Fake('{"enhanced_question": "count people this month", "warnings": []}')
     r = enhance_query("count active users", [_metric("active users")], m)
     assert "active users" in r.enhanced_question.lower() and r.warnings
+
+
+def test_enhance_falls_back_when_a_governed_ALIAS_is_dropped():
+    # teeth: the question hits an ALIAS (not the canonical name); the guardrail must still
+    # fall back when the rewrite drops the metric reference -- real configs rely on aliases.
+    m = _Fake('{"enhanced_question": "show monthly subscription income", "warnings": []}')
+    metric = _metric("mrr", aliases=["monthly recurring revenue"])
+    r = enhance_query("show monthly recurring revenue", [metric], m)
+    assert r.enhanced_question == "show monthly recurring revenue"   # fell back to original
+    assert r.warnings
 
 
 def test_enhance_unparseable_falls_back_to_original():
