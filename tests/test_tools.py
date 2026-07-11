@@ -109,3 +109,27 @@ def test_tool_call_then_self_correct(tmp_path):
     assert model.calls == 4                              # planner + tool round + bad SQL + repair
     gen = [t for t in res.trace if t["node"] == "generate_sql"]
     assert len(gen) == 2 and "track_supplier" in gen[0].get("requested_tables", [])
+
+
+def test_tool_path_repair_keeps_the_planner_step_instruction(tmp_path):
+    # teeth for the PRODUCTION (bind_tools) path: the repair round must carry the
+    # planner's SQL-step instruction, not fall back to the raw question.
+    from agent.graph import _generate_with_tools
+    tables = introspect(build(tmp_path / "t.db"))
+
+    class RecordingToolModel:
+        def bind_tools(self, tools):
+            return self
+        def bind(self, **kw):
+            return self
+        def invoke(self, messages):
+            self.messages = messages
+            return AIMessage(content="SELECT 1", tool_calls=[])
+
+    m = RecordingToolModel()
+    state = {"tables": tables, "schema": "S", "question": "plot the mrr trend",
+             "sql": "SELECT bad", "error": "no such column: bad",
+             "plan": [{"kind": "sql", "instruction": "pull monthly mrr rows"}],
+             "step_index": 0}
+    _generate_with_tools(state, m, attempts=1, requested=[])
+    assert any("pull monthly mrr rows" in getattr(msg, "content", "") for msg in m.messages)
