@@ -47,7 +47,7 @@ def test_sql_plus_python_plan_runs_python_step(saas_db, monkeypatch):
 def test_invalid_plan_then_refusal(saas_db):
     # planner keeps emitting an empty/invalid plan -> bounded replans -> refuse.
     # The question must retrieve tables so the graph reaches the planner (a question
-    # that retrieves nothing would short-circuit at retrieve_schema and never plan).
+    # that retrieves nothing would short-circuit at schema_recall and never plan).
     model = _ScriptModel("no plan here", "still no plan", "and again")
     res = run_agent(saas_db, "how many accounts?", model=model)
     assert "couldn't" in res.answer.lower() or "can't" in res.answer.lower()
@@ -220,11 +220,26 @@ def test_greeting_refuses_at_intent_without_touching_schema(saas_db):
     res = run_agent(saas_db, "hello", model=model)
     nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
     assert "intent_recognition" in nodes
-    assert "retrieve_schema" not in nodes
+    assert "schema_recall" not in nodes
     assert model.calls == 0
     intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
     assert intent_trace.get("refused") is True
     assert "database's data" in res.answer
+
+
+def test_table_relation_computes_non_empty_join_paths_for_a_multi_table_question(saas_db):
+    # teeth: the split is not cosmetic -- a question whose top-k recall spans several
+    # FK-related tables (account/subscription/mrr_movement/invoice/user) must produce
+    # a table_relation trace entry with real join_paths, and the hint must land in the
+    # schema the planner/SQL steps see.
+    model = PlanningFakeModel("SELECT * FROM subscription")
+    res = run_agent(saas_db, "accounts and their subscriptions", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "table_relation" in nodes
+    relation_trace = [s for s in res.trace if s.get("node") == "table_relation"][0]
+    assert relation_trace["paths"] > 0
+    assert relation_trace["join_paths"]
+    assert all({"from", "to", "on"} <= set(p) for p in relation_trace["join_paths"])
 
 
 def test_normal_question_proceeds_past_intent(saas_db):
@@ -232,7 +247,8 @@ def test_normal_question_proceeds_past_intent(saas_db):
     res = run_agent(saas_db, "how many accounts?", model=model)
     nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
     assert "intent_recognition" in nodes
-    assert "retrieve_schema" in nodes
+    assert "schema_recall" in nodes
+    assert "table_relation" in nodes
     intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
     assert intent_trace.get("intent_kind") == "data"
     assert not intent_trace.get("refused")

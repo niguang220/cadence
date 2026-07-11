@@ -3,7 +3,8 @@
     preflight_context
     -> intent_recognition --(out_of_scope)--> END (refuse)
     -> clarify_check
-    -> retrieve_schema --(no tables)--> END (refuse)
+    -> schema_recall --(no tables)--> END (refuse)
+    -> table_relation
     -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
                               \\--(invalid & exhausted)------> respond (refuse)
     -> dispatch (reads plan[step_index].kind):
@@ -64,6 +65,7 @@ from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
 from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
+from agent.schema_relations import join_paths
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
 from agent.usage import UsageCallback
@@ -262,7 +264,7 @@ def _query_enhance(state: AgentState, config=None) -> dict:
     return {"enhanced_question": result.enhanced_question, "trace": [entry]}
 
 
-def _retrieve_schema(state: AgentState) -> dict:
+def _schema_recall(state: AgentState) -> dict:
     tables = state.get("tables")
     if tables is None:
         tables = introspect(state["db_path"])
@@ -275,15 +277,31 @@ def _retrieve_schema(state: AgentState) -> dict:
             "retrieved_tables": [],
             "result": ExecutionResult(False, error=_NO_QUERY),
             "answer": "I couldn't identify any tables relevant to this question.",
-            "trace": [{"node": "retrieve_schema", "tables": [], "retrieval_failed": True}],
+            "trace": [{"node": "schema_recall", "tables": [], "retrieval_failed": True}],
         }
     schema = render_schema(tables, only=top_k, include_fk_neighbors=True)
     return {
         "tables": tables,
         "retrieved_tables": top_k,
         "schema": schema,
-        "trace": [{"node": "retrieve_schema", "tables": top_k}],
+        "trace": [{"node": "schema_recall", "tables": top_k}],
     }
+
+
+def _table_relation(state: AgentState) -> dict:
+    """Deterministic table-relation node: zero LLM. Computes the direct FK-edge
+    join hints among the recalled (top-k) tables and appends a short "Join paths:"
+    hint to the rendered schema -- but only when there is something to hint at, so
+    a recalled set with no direct FK edges leaves the schema byte-identical."""
+    paths = join_paths(state["tables"], state["retrieved_tables"])
+    out = {
+        "join_paths": paths,
+        "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}],
+    }
+    if paths:
+        hint = "\n".join(f"{p['from']} -> {p['to']} (on {p['on']})" for p in paths)
+        out["schema"] = f"{state['schema']}\n\nJoin paths:\n{hint}"
+    return out
 
 
 def _generate_plain(state: AgentState, model, attempts: int, block: str = "") -> str:
@@ -548,8 +566,8 @@ def _route_after_clarify(state: AgentState) -> str:
     return END if state.get("clarification") else "query_enhance"
 
 
-def _route_after_retrieve(state: AgentState) -> str:
-    return "planner" if state.get("retrieved_tables") else END
+def _route_after_schema_recall(state: AgentState) -> str:
+    return "table_relation" if state.get("retrieved_tables") else END
 
 
 def _route_after_generate(state: AgentState) -> str:
@@ -597,7 +615,8 @@ def _build(*, checkpointer=None):
     g.add_node("intent_recognition", _intent_recognition)
     g.add_node("clarify_check", _clarify_check)
     g.add_node("query_enhance", _query_enhance)
-    g.add_node("retrieve_schema", _retrieve_schema)
+    g.add_node("schema_recall", _schema_recall)
+    g.add_node("table_relation", _table_relation)
     g.add_node("planner", _planner)
     g.add_node("plan_validate", _plan_validate)
     g.add_node("dispatch", _dispatch_step)
@@ -617,10 +636,12 @@ def _build(*, checkpointer=None):
     # reaches it): rewrite the question for retrieval/generation, then recall schema.
     g.add_conditional_edges("clarify_check", _route_after_clarify,
                             {"query_enhance": "query_enhance", END: END})
-    g.add_edge("query_enhance", "retrieve_schema")
-    # retrieve_schema now routes into the planner instead of generate_sql:
-    g.add_conditional_edges("retrieve_schema", _route_after_retrieve,
-                            {"planner": "planner", END: END})
+    g.add_edge("query_enhance", "schema_recall")
+    # schema_recall (top-k retrieval, refuses on empty) -> table_relation (deterministic
+    # FK-edge join hints, zero LLM) -> planner:
+    g.add_conditional_edges("schema_recall", _route_after_schema_recall,
+                            {"table_relation": "table_relation", END: END})
+    g.add_edge("table_relation", "planner")
     g.add_edge("planner", "plan_validate")
     g.add_conditional_edges("plan_validate", _route_after_plan_validate,
                             {"dispatch": "dispatch", "planner": "planner", "respond": "respond"})
