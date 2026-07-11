@@ -174,3 +174,18 @@ def test_sql_generation_falls_back_to_question_without_a_plan():
     m = Recorder()
     _generate_plain({"question": "how many tracks?", "schema": "S"}, m, 0)
     assert "how many tracks?" in m.prompt
+
+def test_planner_feeds_the_validation_reason_back_on_replan():
+    # teeth: a rejected plan's reason must reach the planner so replanning isn't blind;
+    # the recognition marker ("JSON:" ending) must survive so fakes still route.
+    from agent.graph import _planner
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "x"}]'})()
+    m = Recorder()
+    state = {"question": "q", "schema": "S", "model": m,
+             "error": "unsupported plan shape ['python']", "plan_attempts": 1}
+    _planner(state)
+    assert "unsupported plan shape" in m.prompt
+    assert m.prompt.rstrip().endswith("JSON:")

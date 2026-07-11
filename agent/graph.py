@@ -373,7 +373,8 @@ def _planner(state: AgentState, config=None) -> dict:
     block = ""
     if state.get("semantic_layer"):
         block = _metric_registry().format(_semantic_metrics(state))
-    plan = plan_query(state["question"], state["schema"], model, semantic_block=block)
+    plan = plan_query(state["question"], state["schema"], model, semantic_block=block,
+                      feedback=state.get("error") or "")   # replan with the reject reason
     attempts = state.get("plan_attempts", 0) + 1
     return {"plan": serialize_plan(plan), "plan_attempts": attempts, "step_index": 0,
             "step_results": [], "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],

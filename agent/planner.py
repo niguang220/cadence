@@ -46,9 +46,14 @@ def _parse_steps(text: str) -> list[dict]:
     return out
 
 
-def plan_query(question: str, schema: str, model, *, semantic_block: str = "") -> Plan:
+def plan_query(question: str, schema: str, model, *, semantic_block: str = "",
+               feedback: str = "") -> Plan:
     prompt = PLANNER_PROMPT.format(schema=schema, question=question,
                                    semantic_block=semantic_block)
+    if feedback:
+        # Prepend so the prompt still ends with "JSON:" (the fake-model recognition
+        # marker). This is the plan-repair analogue of feeding a failed SQL's error back.
+        prompt = f"Your previous plan was rejected: {feedback}. Correct it.\n\n{prompt}"
     response = model.invoke(prompt)
     text = getattr(response, "content", response)
     return deserialize_plan(_parse_steps(text))
