@@ -1,4 +1,4 @@
-"""Tests for the get_schema tool and the tool-calling generation path (PR #7).
+"""Tests for the get_schema tool and the tool-calling generation path.
 
 The fake model here *has* ``bind_tools``, so it drives the tool-calling branch and
 returns a scripted sequence: first a get_schema call, then the SQL that uses the

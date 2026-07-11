@@ -4,7 +4,7 @@ One TypedDict flows through every node. ``total=False`` so nodes only return the
 keys they touch; LangGraph merges them. ``trace`` uses an ``operator.add`` reducer
 so each node *appends* its step instead of overwriting the list.
 
-Fields for the reliability loop (``error``, ``retry_count``, ``clarification``) live
+Fields for the reliability loop (``error``, ``attempts``, ``clarification``) live
 here from the start so the loop is a wiring change, not a state-schema change.
 """
 from __future__ import annotations
@@ -46,7 +46,6 @@ class AgentState(TypedDict, total=False):
     plan: list[dict]                 # serialized [{kind, instruction}, ...]
     plan_attempts: int               # planner retries (bounded)
     step_index: int                  # cursor into plan
-    step_results: list[dict]         # per-step output, appended as steps complete
     python_code: str                 # current python step's generated program
     python_attempts: int             # python-step retries (bounded)
     python_analysis: dict            # parsed sandbox output for the current python step

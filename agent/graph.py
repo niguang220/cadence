@@ -68,6 +68,7 @@ from agent.validate import validate_result
 
 MAX_ATTEMPTS = 3            # total generations (1 draft + up to 2 repairs)
 MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refuses
+MAX_PYTHON_ATTEMPTS = 3     # python-step retries before the graph gives up and refuses
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
@@ -377,8 +378,8 @@ def _planner(state: AgentState, config=None) -> dict:
                       feedback=state.get("error") or "")   # replan with the reject reason
     attempts = state.get("plan_attempts", 0) + 1
     return {"plan": serialize_plan(plan), "plan_attempts": attempts, "step_index": 0,
-            "step_results": [], "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],
-                                           "attempt": attempts}]}
+            "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],
+                      "attempt": attempts}]}
 
 
 def _plan_validate(state: AgentState) -> dict:
@@ -455,13 +456,7 @@ def _python_analyze(state: AgentState) -> dict:
 
 def _step_advance(state: AgentState) -> dict:
     step = _current_step(state)
-    if step["kind"] == "sql":
-        record = {"kind": "sql", "sql": state.get("sql", ""),
-                  "rows": len(state["result"].rows) if state.get("result") else 0}
-    else:
-        record = {"kind": "python", "analysis": state.get("python_analysis", {}).get("analysis")}
-    results = state.get("step_results", []) + [record]
-    return {"step_results": results, "step_index": state["step_index"] + 1,
+    return {"step_index": state["step_index"] + 1,
             "attempts": 0, "python_attempts": 0, "error": None,
             "trace": [{"node": "step_advance", "completed": step["kind"]}]}
 
@@ -529,7 +524,7 @@ def _route_after_sql_validate(state: AgentState) -> str:
 def _route_after_python_analyze(state: AgentState) -> str:
     if not state.get("error"):
         return "step_advance"
-    if state.get("python_attempts", 0) >= MAX_ATTEMPTS:   # bounded: give up and refuse
+    if state.get("python_attempts", 0) >= MAX_PYTHON_ATTEMPTS:   # bounded: give up and refuse
         return "respond"
     return "python_generate"                              # repair: re-generate with the failure
 
