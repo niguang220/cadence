@@ -12,16 +12,17 @@ from agent.prompts import PLANNER_PROMPT
 _FENCE = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL)
 
 
-def _extract_json_array(text: str) -> list:
-    """Return the first JSON array in text, or []. Prefer a ```json fence; otherwise
-    scan each '[' and raw_decode from there -- so a valid plan followed by prose or a
-    later '[...]' isn't swallowed into an unparseable greedy match."""
+def _json_arrays(text: str):
+    """Yield each JSON array in text: a ```json fence first, then every '[' raw_decoded
+    in place. Yielding candidates (rather than returning the first) lets the caller skip
+    an earlier non-plan list -- e.g. an echoed ["sql", "python"] -- and keep looking for
+    one that actually holds steps."""
     fence = _FENCE.search(text)
     if fence:
         try:
             data = json.loads(fence.group(1))
             if isinstance(data, list):
-                return data
+                yield data
         except (json.JSONDecodeError, ValueError):
             pass
     decoder = json.JSONDecoder()
@@ -33,17 +34,16 @@ def _extract_json_array(text: str) -> list:
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(data, list):
-            return data
-    return []
+            yield data
 
 
 def _parse_steps(text: str) -> list[dict]:
-    data = _extract_json_array((text or "").strip())
-    out = []
-    for item in data:
-        if isinstance(item, dict) and "kind" in item and "instruction" in item:
-            out.append({"kind": str(item["kind"]), "instruction": str(item["instruction"])})
-    return out
+    for data in _json_arrays((text or "").strip()):
+        out = [{"kind": str(i["kind"]), "instruction": str(i["instruction"])}
+               for i in data if isinstance(i, dict) and "kind" in i and "instruction" in i]
+        if out:                          # first array that actually yields steps wins
+            return out
+    return []
 
 
 def plan_query(question: str, schema: str, model, *, semantic_block: str = "",

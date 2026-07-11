@@ -29,6 +29,13 @@ def test_parses_valid_plan_despite_trailing_bracket_prose():
     text = 'Here is the plan: [{"kind": "sql", "instruction": "x"}]\nNotes: [ok]'
     assert _parse_steps(text) == [{"kind": "sql", "instruction": "x"}]
 
+def test_parses_plan_after_an_earlier_non_plan_json_list():
+    # teeth: returning the FIRST json array grabbed a non-plan list (e.g. an echoed
+    # ["sql","python"]) and yielded an empty plan; keep scanning for one that has steps.
+    from agent.planner import _parse_steps
+    text = 'Allowed kinds: ["sql", "python"]\nPlan: [{"kind": "sql", "instruction": "x"}]'
+    assert _parse_steps(text) == [{"kind": "sql", "instruction": "x"}]
+
 def test_unparseable_returns_empty_plan():
     m = _FakeModel("I cannot plan this")
     assert plan_query("q", "S", m).steps == []
