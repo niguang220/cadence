@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 
@@ -50,11 +51,24 @@ def build_sandbox_command(program: str, *, image: str = _IMAGE,
     return ["docker", "run", "-i", *named, *_ISOLATION_FLAGS, image, "python", "-c", program]
 
 
-_MAX_OUTPUT_CHARS = 1_000_000   # cap captured stdout/stderr (character count): a print-bomb inside the
-#   container shouldn't be able to grow the host-side buffer without bound. The
-#   container's --memory/--pids/timeout limits already bound how much it can emit;
-#   this truncates what we hand downstream. (A fully streaming early-kill reader is a
-#   possible future hardening if print-bombs become part of the real threat model.)
+_MAX_OUTPUT_CHARS = 1_000_000   # keep at most this many chars of stdout/stderr; excess
+#   is drained and discarded (see _read_capped) so a streaming print-bomb can't grow the
+#   host-side buffer without bound.
+_CHUNK = 65536
+
+
+def _read_capped(stream, cap: int, sink: list) -> None:
+    """Drain a text stream, keeping at most `cap` chars (the result is appended to
+    `sink`). Excess is read and discarded rather than buffered, so a runaway producer
+    can't balloon host memory; the pipe is still fully drained so it never fills and
+    blocks the child. Runs in a thread per stream so stdout and stderr can't deadlock."""
+    kept: list[str] = []
+    total = 0
+    for chunk in iter(lambda: stream.read(_CHUNK), ""):
+        if total < cap:
+            kept.append(chunk[:cap - total])
+        total += len(chunk)
+    sink.append("".join(kept))
 
 
 def _kill_container(name: str) -> None:
@@ -70,12 +84,38 @@ def _kill_container(name: str) -> None:
 
 
 def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
-    proc = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True,
-                          timeout=timeout)
-    return subprocess.CompletedProcess(
-        proc.args, proc.returncode,
-        stdout=(proc.stdout or "")[:_MAX_OUTPUT_CHARS],
-        stderr=(proc.stderr or "")[:_MAX_OUTPUT_CHARS])
+    # Stream stdout/stderr through capped reader threads instead of buffering the whole
+    # output (subprocess.run/capture_output would grow the host buffer without bound
+    # before the cap is applied). The threads drain both pipes concurrently while the
+    # main thread writes stdin and waits, so nothing deadlocks.
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    out: list[str] = []
+    err: list[str] = []
+    t_out = threading.Thread(target=_read_capped, args=(proc.stdout, _MAX_OUTPUT_CHARS, out))
+    t_err = threading.Thread(target=_read_capped, args=(proc.stderr, _MAX_OUTPUT_CHARS, err))
+    t_out.start()
+    t_err.start()
+    try:
+        proc.stdin.write(stdin_text)
+    except BrokenPipeError:
+        pass                             # program exited before reading its input
+    try:
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()                      # stop the CLI; run_in_sandbox kills the container
+        proc.wait()
+        raise
+    finally:
+        t_out.join()
+        t_err.join()
+    return subprocess.CompletedProcess(cmd, proc.returncode,
+                                       stdout=out[0] if out else "",
+                                       stderr=err[0] if err else "")
 
 
 def run_in_sandbox(program: str, stdin_data: dict, *, timeout: float = 10.0,

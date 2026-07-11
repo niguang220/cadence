@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import agent.sandbox as sandbox
 from agent.sandbox import build_sandbox_command, run_in_sandbox, SandboxResult
 
@@ -77,3 +78,24 @@ def test_docker_not_available_is_error():
         raise FileNotFoundError("docker")
     res = run_in_sandbox("prog", {}, runner=runner)
     assert not res.ok and "docker not available" in res.error
+
+def test_read_capped_bounds_memory_and_discards_excess():
+    # teeth: a streaming print-bomb must not balloon host memory. The reader keeps at
+    # most `cap` chars and drains (discards) the rest, so kept memory is bounded even
+    # when the producer emits far more.
+    import io
+    kept = []
+    sandbox._read_capped(io.StringIO("x" * 5000), 100, kept)
+    assert kept == ["x" * 100]
+
+def test_subprocess_runner_round_trips_stdin_and_caps_output(monkeypatch):
+    # exercise the real Popen + reader-thread plumbing without docker (a local python):
+    # stdin must reach the child, and stdout beyond the cap must be dropped.
+    monkeypatch.setattr(sandbox, "_MAX_OUTPUT_CHARS", 50)
+    echo = sandbox._subprocess_runner(
+        [sys.executable, "-c", "import sys; print(sys.stdin.read().strip().upper())"],
+        "hello", 5)
+    assert echo.returncode == 0 and echo.stdout.strip() == "HELLO"
+    flood = sandbox._subprocess_runner(
+        [sys.executable, "-c", "print('x' * 100000)"], "", 5)
+    assert flood.returncode == 0 and len(flood.stdout) <= 50
