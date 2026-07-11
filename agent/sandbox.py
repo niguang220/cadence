@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 from dataclasses import dataclass
 
 _IMAGE = "cadence-sandbox:latest"  # built from Dockerfile.sandbox (slim + pandas);
@@ -38,11 +39,15 @@ class SandboxResult:
     error: str = ""
 
 
-def build_sandbox_command(program: str, *, image: str = _IMAGE) -> list[str]:
+def build_sandbox_command(program: str, *, image: str = _IMAGE,
+                          name: str | None = None) -> list[str]:
     # -i keeps the container's stdin open so the input JSON is actually delivered
     # (docker run closes stdin without it). Not an isolation flag, so it lives here,
     # not in _ISOLATION_FLAGS. No -t: a TTY is neither needed nor wanted.
-    return ["docker", "run", "-i", *_ISOLATION_FLAGS, image, "python", "-c", program]
+    # --name lets a timed-out run be killed by name: `docker run` talks to the daemon,
+    # so killing the CLI on timeout would otherwise leave the container running.
+    named = ["--name", name] if name else []
+    return ["docker", "run", "-i", *named, *_ISOLATION_FLAGS, image, "python", "-c", program]
 
 
 _MAX_OUTPUT_CHARS = 1_000_000   # cap captured stdout/stderr (character count): a print-bomb inside the
@@ -50,6 +55,18 @@ _MAX_OUTPUT_CHARS = 1_000_000   # cap captured stdout/stderr (character count): 
 #   container's --memory/--pids/timeout limits already bound how much it can emit;
 #   this truncates what we hand downstream. (A fully streaming early-kill reader is a
 #   possible future hardening if print-bombs become part of the real threat model.)
+
+
+def _kill_container(name: str) -> None:
+    """Best-effort: stop a container that outran its wall-clock timeout. `docker run`
+    talks to the daemon, so killing the CLI on timeout leaves the container alive; an
+    explicit `docker kill` on the named container is what actually stops it (`--rm`
+    then reaps it). Cleanup failures are swallowed -- the container's own resource caps
+    still bound it, and there is nothing useful to do if the daemon is unreachable."""
+    try:
+        subprocess.run(["docker", "kill", name], capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
@@ -62,12 +79,15 @@ def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
 
 
 def run_in_sandbox(program: str, stdin_data: dict, *, timeout: float = 10.0,
-                   image: str = _IMAGE, runner=None) -> SandboxResult:
+                   image: str = _IMAGE, runner=None, kill=None) -> SandboxResult:
     runner = runner or _subprocess_runner
-    cmd = build_sandbox_command(program, image=image)
+    kill = kill or _kill_container
+    name = f"cadence-sandbox-{uuid.uuid4().hex}"
+    cmd = build_sandbox_command(program, image=image, name=name)
     try:
         proc = runner(cmd, json.dumps(stdin_data), timeout)
     except subprocess.TimeoutExpired:
+        kill(name)                       # stop the container, not just the killed CLI
         return SandboxResult(False, error="sandbox timed out")
     except FileNotFoundError:
         return SandboxResult(False, error="docker not available")

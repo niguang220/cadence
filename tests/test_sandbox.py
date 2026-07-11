@@ -1,5 +1,6 @@
 import json
 import subprocess
+import agent.sandbox as sandbox
 from agent.sandbox import build_sandbox_command, run_in_sandbox, SandboxResult
 
 _ISOLATION = ["--rm", "--network=none", "--memory=256m", "--cpus=1",
@@ -43,8 +44,33 @@ def test_nonzero_exit_is_error():
 def test_timeout_is_error():
     def runner(cmd, stdin_text, timeout):
         raise subprocess.TimeoutExpired(cmd, timeout)
-    res = run_in_sandbox("prog", {}, runner=runner)
+    res = run_in_sandbox("prog", {}, runner=runner, kill=lambda name: None)
     assert not res.ok and "timed out" in res.error
+
+def test_command_carries_a_unique_container_name():
+    # a named container is what lets a timed-out run be killed (docker run alone
+    # leaves the container on the daemon after the CLI is killed).
+    cmd = build_sandbox_command("print(1)", name="cadence-sandbox-abc")
+    assert "--name" in cmd and "cadence-sandbox-abc" in cmd
+
+def test_timeout_kills_the_container():
+    # teeth: on wall-clock timeout the container must be killed, not just the CLI.
+    killed = []
+    def runner(cmd, stdin_text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    res = run_in_sandbox("prog", {}, runner=runner, kill=killed.append)
+    assert not res.ok and "timed out" in res.error
+    assert len(killed) == 1 and killed[0].startswith("cadence-sandbox-")
+
+def test_container_name_in_command_matches_the_one_killed():
+    # the name docker sees and the name we kill must be identical, or the kill misses.
+    seen = {}
+    killed = []
+    def runner(cmd, stdin_text, timeout):
+        seen["name"] = cmd[cmd.index("--name") + 1]
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    run_in_sandbox("prog", {}, runner=runner, kill=killed.append)
+    assert killed == [seen["name"]]
 
 def test_docker_not_available_is_error():
     def runner(cmd, stdin_text, timeout):
