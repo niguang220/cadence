@@ -146,3 +146,31 @@ def test_respond_adds_no_truncation_note_when_result_is_complete():
              "tables": [], "python_analysis": {"analysis": "trend up"}}
     out = _respond(state)
     assert "truncat" not in out["answer"].lower()
+
+def test_sql_generation_uses_the_planner_step_instruction():
+    # teeth: the planner's SQL-step instruction must reach the SQL generation prompt,
+    # not be ignored in favor of only the raw question (which is what made a two-step
+    # plan's "pull raw rows" step nominal only).
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    state = {"question": "plot the mrr trend", "schema": "S",
+             "plan": [{"kind": "sql", "instruction": "pull monthly mrr rows"}],
+             "step_index": 0}
+    _generate_plain(state, m, 0)
+    assert "pull monthly mrr rows" in m.prompt           # step instruction reaches SQL gen
+    assert "plot the mrr trend" in m.prompt              # original question still present
+
+def test_sql_generation_falls_back_to_question_without_a_plan():
+    # direct/unit callers may have no plan in state; generation must still work.
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    _generate_plain({"question": "how many tracks?", "schema": "S"}, m, 0)
+    assert "how many tracks?" in m.prompt

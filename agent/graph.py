@@ -244,7 +244,7 @@ def _retrieve_schema(state: AgentState) -> dict:
 def _generate_plain(state: AgentState, model, attempts: int, block: str = "") -> str:
     """Single-shot generation for models without tool support (e.g. test fakes)."""
     if attempts == 0:
-        return generate_sql(state["question"], state["schema"], model,
+        return generate_sql(_sql_task(state), state["schema"], model,
                            semantic_block=block)
     prompt = REPAIR_PROMPT.format(
         schema=state["schema"], question=state["question"],
@@ -271,7 +271,7 @@ def _generate_with_tools(state: AgentState, model, attempts: int, requested: lis
         catalog=", ".join(sorted(t.name for t in tables)), schema=state["schema"],
         semantic_block=block)
     if attempts == 0:
-        human = state["question"]
+        human = _sql_task(state)
     else:
         human = REPAIR_INSTRUCTION.format(
             question=state["question"], failed_sql=state.get("sql", ""),
@@ -388,6 +388,23 @@ def _plan_validate(state: AgentState) -> dict:
 
 def _current_step(state: AgentState) -> dict:
     return state["plan"][state["step_index"]]
+
+
+def _sql_task(state: AgentState) -> str:
+    """What the SQL step should generate for. In a multi-step plan the planner may
+    decompose the SQL step (e.g. "pull raw monthly rows"); surface that instruction
+    alongside the original question so the SQL is driven by the step, not only the
+    overall question. Falls back to the question when there is no plan (direct callers).
+    Keeping the question as the anchor and adding the instruction as context is the
+    conservative fix; fully instruction-driven generation is a later refinement (it
+    needs real-model checking that the planner emits faithful SQL instructions)."""
+    plan = state.get("plan")
+    if not plan:
+        return state["question"]
+    instruction = (plan[state.get("step_index", 0)] or {}).get("instruction", "")
+    if instruction.strip():
+        return f"{state['question']}\n\nFor this step: {instruction}"
+    return state["question"]
 
 
 def _dispatch_step(state: AgentState) -> dict:
