@@ -84,26 +84,30 @@ def _kill_container(name: str) -> None:
 
 
 def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
-    # Stream stdout/stderr through capped reader threads instead of buffering the whole
-    # output (subprocess.run/capture_output would grow the host buffer without bound
-    # before the cap is applied). The threads drain both pipes concurrently while the
-    # main thread writes stdin and waits, so nothing deadlocks.
+    # Handle all three pipes off the main thread (like subprocess.communicate): reader
+    # threads drain stdout/stderr with a cap, and a writer thread feeds stdin. Writing
+    # stdin on the main thread would block on a larger-than-pipe-buffer payload if the
+    # child never reads it, so the wall-clock timeout below -- which triggers the
+    # container kill -- would never fire.
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
     out: list[str] = []
     err: list[str] = []
-    t_out = threading.Thread(target=_read_capped, args=(proc.stdout, _MAX_OUTPUT_CHARS, out))
-    t_err = threading.Thread(target=_read_capped, args=(proc.stderr, _MAX_OUTPUT_CHARS, err))
-    t_out.start()
-    t_err.start()
-    try:
-        proc.stdin.write(stdin_text)
-    except BrokenPipeError:
-        pass                             # program exited before reading its input
-    try:
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
+
+    def _write_stdin():
+        try:
+            proc.stdin.write(stdin_text)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass                         # child exited before reading its input
+
+    threads = [
+        threading.Thread(target=_write_stdin),
+        threading.Thread(target=_read_capped, args=(proc.stdout, _MAX_OUTPUT_CHARS, out)),
+        threading.Thread(target=_read_capped, args=(proc.stderr, _MAX_OUTPUT_CHARS, err)),
+    ]
+    for t in threads:
+        t.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -111,8 +115,8 @@ def _subprocess_runner(cmd: list[str], stdin_text: str, timeout: float):
         proc.wait()
         raise
     finally:
-        t_out.join()
-        t_err.join()
+        for t in threads:
+            t.join()
     return subprocess.CompletedProcess(cmd, proc.returncode,
                                        stdout=out[0] if out else "",
                                        stderr=err[0] if err else "")

@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import pytest
 import agent.sandbox as sandbox
 from agent.sandbox import build_sandbox_command, run_in_sandbox, SandboxResult
 
@@ -99,3 +100,12 @@ def test_subprocess_runner_round_trips_stdin_and_caps_output(monkeypatch):
     flood = sandbox._subprocess_runner(
         [sys.executable, "-c", "print('x' * 100000)"], "", 5)
     assert flood.returncode == 0 and len(flood.stdout) <= 50
+
+def test_subprocess_runner_times_out_when_child_ignores_a_large_stdin():
+    # teeth: a >pipe-buffer payload sent to a child that never reads stdin must not
+    # block the writer and prevent the wall-clock timeout (which is what triggers the
+    # container kill). Writing stdin on the main thread would deadlock here.
+    big = "x" * 200_000                              # well over the ~64KB pipe buffer
+    with pytest.raises(subprocess.TimeoutExpired):
+        sandbox._subprocess_runner(
+            [sys.executable, "-c", "import time; time.sleep(5)"], big, 1.0)
