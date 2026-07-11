@@ -95,3 +95,46 @@ Problem: {problem}
 
 Write a corrected single read-only query.
 SQL:"""
+
+
+PLANNER_PROMPT = """You plan how to answer a data question about a SQL database.
+Output a JSON array of steps. Each step is {{"kind": "sql"|"python", "instruction": "..."}}.
+
+Rules:
+- Always start with exactly one "sql" step that fetches the raw rows needed.
+- Add a "python" step ONLY if the answer needs computation or a chart that SQL can't
+  do directly (e.g. a trend line, a cohort-retention matrix, a plotted curve).
+- Most questions are one "sql" step. Do not invent extra steps.
+- The python step receives the sql step's rows; describe what to compute, not code.
+
+{semantic_block}Schema:
+{schema}
+
+Question: {question}
+
+JSON:"""
+
+
+PYTHON_REPAIR_BLOCK = """Your previous program failed — fix the bug, do not repeat it.
+Previous program:
+{previous_code}
+It failed with:
+{previous_error}
+
+"""
+
+PYTHON_GEN_PROMPT = """Write a complete Python program for one analysis step.
+
+The program MUST:
+- read its input from stdin as JSON: {{"columns": [...], "rows": [[...], ...]}}
+- compute what the instruction asks, using only the standard library and pandas
+- write its result to stdout as a single JSON object (numbers/strings/lists only;
+  for a chart, emit a base64 PNG string under a "chart" key)
+- not read files, not access the network, not print anything except the JSON
+
+{repair_block}Instruction: {instruction}
+
+Input columns: {columns}
+Sample rows (first few): {sample_rows}
+
+Output ONLY the program (optionally in a ```python fence), nothing else."""

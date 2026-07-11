@@ -1,0 +1,207 @@
+from agent.graph import run_agent
+import agent.graph as graph
+from agent.db.build_demo_db import build as build_demo_db
+
+
+class _ScriptModel:
+    """Returns queued responses in order; the LAST response is sticky (repeats), so a
+    'bad SQL forever' test can exhaust the repair budget without counting attempts."""
+    def __init__(self, *responses): self._q = list(responses)
+    def invoke(self, _prompt):
+        content = self._q.pop(0) if len(self._q) > 1 else self._q[0]
+        return type("R", (), {"content": content})()
+    def bind(self, **_): return self
+    # no bind_tools -> graph uses the plain generation path
+
+
+def test_sql_only_plan_runs_end_to_end(saas_db):
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"count accounts"}]',   # planner
+        "SELECT COUNT(*) FROM account",                       # generate_sql
+    )
+    res = run_agent(saas_db, "how many accounts?", model=model)
+    assert res.sql == "SELECT COUNT(*) FROM account"
+    assert res.answer  # non-empty
+
+
+def test_sql_plus_python_plan_runs_python_step(saas_db, monkeypatch):
+    # fake the sandbox so no real Docker runs
+    monkeypatch.setattr(graph, "run_in_sandbox",
+                        lambda prog, data, **kw: graph.SandboxResult(True, stdout='{"growth": 0.1}'))
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"pull mrr"},{"kind":"python","instruction":"growth"}]',
+        "SELECT mrr FROM subscription",                       # generate_sql
+        "import sys,json; print(json.dumps({'growth':0.1}))", # generate_python
+    )
+    res = run_agent(saas_db, "mrr growth?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "python_analyze" in nodes
+
+
+def test_invalid_plan_then_refusal(saas_db):
+    # planner keeps emitting an empty/invalid plan -> bounded replans -> refuse.
+    # The question must retrieve tables so the graph reaches the planner (a question
+    # that retrieves nothing would short-circuit at retrieve_schema and never plan).
+    model = _ScriptModel("no plan here", "still no plan", "and again")
+    res = run_agent(saas_db, "how many accounts?", model=model)
+    assert "couldn't" in res.answer.lower() or "can't" in res.answer.lower()
+
+
+def test_sql_decline_short_circuits_without_execute(saas_db):
+    # planner emits a valid SQL plan, but generation declines (CANNOT_ANSWER)
+    model = _ScriptModel('[{"kind":"sql","instruction":"count"}]', "CANNOT_ANSWER")
+    res = run_agent(saas_db, "how many accounts?", model=model)
+    assert "couldn't" in res.answer.lower()
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "execute" not in nodes and "step_advance" not in nodes
+
+
+def test_sql_repair_then_python_still_runs(saas_db, monkeypatch):
+    monkeypatch.setattr(graph, "run_in_sandbox",
+                        lambda prog, data, **kw: graph.SandboxResult(True, stdout='{"g":1}'))
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"pull"},{"kind":"python","instruction":"g"}]',
+        "SELECT * FROM no_such_table",             # bad SQL -> exec error -> repair
+        "SELECT mrr FROM subscription",            # repaired SQL
+        "import sys,json; print(json.dumps({'g':1}))",
+    )
+    res = run_agent(saas_db, "mrr growth?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert nodes.count("generate_sql") >= 2 and "python_analyze" in nodes
+
+
+def test_sql_repair_exhausted_refuses_without_python(saas_db):
+    # SQL never becomes valid -> MAX_ATTEMPTS -> refuse; python step never reached
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"pull"},{"kind":"python","instruction":"g"}]',
+        "SELECT * FROM no_such_table",             # sticky: repeats to exhaust the budget
+    )
+    res = run_agent(saas_db, "mrr growth?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "python_generate" not in nodes and "couldn't" in res.answer.lower()
+
+
+def test_python_null_analysis_still_marked_as_python_step(saas_db, monkeypatch):
+    # A python step whose stdout is literally `null` parses to analysis=None. respond
+    # must still recognize a python step RAN (keyed on python_analysis presence, not a
+    # None sentinel), else a null result is silently misreported as SQL-only.
+    monkeypatch.setattr(graph, "run_in_sandbox",
+                        lambda prog, data, **kw: graph.SandboxResult(True, stdout='null'))
+    model = _ScriptModel(
+        '[{"kind":"sql","instruction":"pull mrr"},{"kind":"python","instruction":"x"}]',
+        "SELECT mrr FROM subscription",
+        "import sys,json; print('null')",
+    )
+    res = run_agent(saas_db, "mrr?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "python_analyze" in nodes                     # the python step did run
+    respond = [s for s in res.trace if isinstance(s, dict) and s.get("node") == "respond"][-1]
+    assert respond.get("python_analysis") is True        # not misclassified as SQL-only
+
+
+def test_governed_sql_result_never_dispatches_python(tmp_path, monkeypatch):
+    # Cross-component regression guard: a PII-governed SQL result must refuse BEFORE any
+    # python step runs, so untrusted compute never touches governed rows. Enforced today
+    # by run_query's result-governance gate (governed result -> ok=False -> validate
+    # refuses as governance_block -> python never dispatched). This locks the invariant
+    # regardless of WHICH component enforces it: if a future change removes
+    # result-governance from run_query or reroutes governance_block, the sandbox would
+    # run on governed data and this test turns red.
+    db = str(build_demo_db(tmp_path / "demo.db"))
+    sandbox_calls = []
+    def _spy(prog, data, **kw):
+        sandbox_calls.append(1)
+        return graph.SandboxResult(True, stdout='{"x": 1}')
+    monkeypatch.setattr(graph, "run_in_sandbox", _spy)
+    model = _ScriptModel(
+        # a [sql, python] plan: absent the guarantee, python WOULD be dispatched
+        '[{"kind":"sql","instruction":"emails"},{"kind":"python","instruction":"count"}]',
+        # sql-governance passes (sees only customer_id); the RESULT column 'email' is a
+        # PII name, so run_query's result-governance blocks it (ok=False).
+        "SELECT customer_id AS email FROM customer",
+    )
+    res = run_agent(db, "list customer emails", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert sandbox_calls == []                            # sandbox never called
+    assert "python_generate" not in nodes                # python step never dispatched
+    assert "python_analyze" not in nodes
+    assert "governance violation" in res.answer           # refused via the governance gate
+
+
+def test_respond_flags_truncation_when_python_ran_on_truncated_rows():
+    # teeth: a Python analysis computed on a truncated SQL result must not be presented
+    # as if it were complete -- the answer says so.
+    from agent.graph import _respond
+    from agent.execution import ExecutionResult
+    state = {"result": ExecutionResult(True, columns=["x"], rows=[(1,)], truncated=True),
+             "tables": [], "python_analysis": {"analysis": "trend up"}}
+    out = _respond(state)
+    assert "trend up" in out["answer"]
+    assert "truncat" in out["answer"].lower()
+
+def test_respond_adds_no_truncation_note_when_result_is_complete():
+    from agent.graph import _respond
+    from agent.execution import ExecutionResult
+    state = {"result": ExecutionResult(True, columns=["x"], rows=[(1,)], truncated=False),
+             "tables": [], "python_analysis": {"analysis": "trend up"}}
+    out = _respond(state)
+    assert "truncat" not in out["answer"].lower()
+
+def test_sql_generation_uses_the_planner_step_instruction():
+    # teeth: the planner's SQL-step instruction must reach the SQL generation prompt,
+    # not be ignored in favor of only the raw question (which is what made a two-step
+    # plan's "pull raw rows" step nominal only).
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    state = {"question": "plot the mrr trend", "schema": "S",
+             "plan": [{"kind": "sql", "instruction": "pull monthly mrr rows"}],
+             "step_index": 0}
+    _generate_plain(state, m, 0)
+    assert "pull monthly mrr rows" in m.prompt           # step instruction reaches SQL gen
+    assert "plot the mrr trend" in m.prompt              # original question still present
+
+def test_sql_generation_falls_back_to_question_without_a_plan():
+    # direct/unit callers may have no plan in state; generation must still work.
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    _generate_plain({"question": "how many tracks?", "schema": "S"}, m, 0)
+    assert "how many tracks?" in m.prompt
+
+def test_sql_repair_round_keeps_the_planner_step_instruction():
+    # teeth: the repair round must also carry the step instruction, or self-correction
+    # drifts back toward the original question instead of the SQL step's task.
+    from agent.graph import _generate_plain
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": "SELECT 1"})()
+    m = Recorder()
+    state = {"question": "plot the mrr trend", "schema": "S",
+             "sql": "SELECT bad", "error": "no such column: bad",
+             "plan": [{"kind": "sql", "instruction": "pull monthly mrr rows"}],
+             "step_index": 0}
+    _generate_plain(state, m, attempts=1)                # repair round
+    assert "pull monthly mrr rows" in m.prompt
+
+def test_planner_feeds_the_validation_reason_back_on_replan():
+    # teeth: a rejected plan's reason must reach the planner so replanning isn't blind;
+    # the recognition marker ("JSON:" ending) must survive so fakes still route.
+    from agent.graph import _planner
+    class Recorder:
+        def invoke(self, prompt):
+            self.prompt = prompt
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "x"}]'})()
+    m = Recorder()
+    state = {"question": "q", "schema": "S", "model": m,
+             "error": "unsupported plan shape ['python']", "plan_attempts": 1}
+    _planner(state)
+    assert "unsupported plan shape" in m.prompt
+    assert m.prompt.rstrip().endswith("JSON:")

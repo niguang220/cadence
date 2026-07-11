@@ -5,7 +5,7 @@ generating SQL we select the top-k relevant tables. This is the deterministic
 *lexical* baseline (no LLM, no embeddings): score each table by how well the
 question's words overlap its name, columns, descriptions and sample values,
 plus a small hand-curated layer of domain synonyms/phrases. Embedding / hybrid
-retrieval is a later (Phase 4) upgrade.
+retrieval can be added later as an upgrade.
 """
 from __future__ import annotations
 

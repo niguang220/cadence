@@ -21,6 +21,11 @@ from agent.semantic_layer import load_metrics
 
 
 class FakeModel:
+    """Plan-aware fake: the planner is the first model call under the step-loop graph,
+    so a planner prompt yields a single SQL step and any other prompt yields the
+    configured SQL (keeping ``last_prompt`` the generation prompt). ``calls`` counts
+    every invoke, planner included."""
+
     def __init__(self, sql: str):
         self.sql = sql
         self.calls = 0
@@ -29,6 +34,9 @@ class FakeModel:
     def invoke(self, prompt):
         self.calls += 1
         self.last_prompt = prompt
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self.sql})()
 
 
@@ -57,7 +65,7 @@ def run_smoke(db_path: str | Path) -> list[str]:
 
     result = resume_question_session(thread_id, "sales")
     _check(failures, result.execution.ok, "valid clarification should resume to execution")
-    _check(failures, model.calls == 1, "valid clarification should call model once")
+    _check(failures, model.calls == 2, "valid clarification should call model twice (planner + generation)")
     _check(failures, "metric: total" in model.last_prompt, "typed intent should reach prompt")
     clarify_trace = next((t for t in result.trace if t.get("node") == "clarify_check" and t.get("resumed")), {})
     _check(failures, clarify_trace.get("intent_verdict") == "ok", "valid clarification intent should be ok")

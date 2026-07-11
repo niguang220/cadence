@@ -1,11 +1,22 @@
-"""The agent as a LangGraph state machine.
+"""The agent as a LangGraph state machine (planner-driven step loop).
 
     preflight_context
-    -> clarify_check (Phase 2/#8)
+    -> clarify_check
     -> retrieve_schema --(no tables)--> END (refuse)
-    -> generate_sql ---(CANNOT_ANSWER)-> END (decline)
-    -> execute -> validate --(ok)--------> respond -> END
-                          \\--(repair & attempts<MAX)--> generate_sql
+    -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
+                              \\--(invalid & exhausted)------> respond (refuse)
+    -> dispatch (reads plan[step_index].kind):
+         "sql"    -> generate_sql --(CANNOT_ANSWER)--> END (decline)
+                     -> execute -> validate --(ok)-----------> step_advance
+                                          \\--(repair & attempts<MAX)--> generate_sql
+         "python" -> python_generate -> python_execute -> python_analyze --(ok)--> step_advance
+                                          \\--(fail & attempts<MAX)----> python_generate
+    -> step_advance --(more steps)--> dispatch ;  --(done)--> respond -> END
+
+The planner decomposes the question into a 1-2 step plan (one SQL step, optionally
+followed by one Python analysis step); ``validate_plan`` rejects malformed plans and
+the graph replans (bounded). SQL steps reuse the same generate/execute/validate/repair
+body as before; Python steps run generated code in an isolated sandbox.
 
 Clarification is deterministic and traceable: ``clarify_check`` asks only when
 the question is ambiguous, maps the human reply into a typed metric intent, and
@@ -44,14 +55,19 @@ from agent.generation import (AnswerResult, _extract_sql, _format_answer, _NO_QU
 from agent.governance import check_result_governance, check_sql_governance
 from agent.hybrid_retriever import retrieve
 from agent.observability import setup_phoenix
+from agent.plan import deserialize_plan, serialize_plan, validate_plan
+from agent.planner import plan_query
 from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
                            TOOL_SYSTEM_PROMPT)
+from agent.python_step import analyze_python_output, generate_python
+from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
 from agent.usage import UsageCallback
 from agent.validate import validate_result
 
 MAX_ATTEMPTS = 3            # total generations (1 draft + up to 2 repairs)
+MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refuses
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
@@ -228,10 +244,10 @@ def _retrieve_schema(state: AgentState) -> dict:
 def _generate_plain(state: AgentState, model, attempts: int, block: str = "") -> str:
     """Single-shot generation for models without tool support (e.g. test fakes)."""
     if attempts == 0:
-        return generate_sql(state["question"], state["schema"], model,
+        return generate_sql(_sql_task(state), state["schema"], model,
                            semantic_block=block)
     prompt = REPAIR_PROMPT.format(
-        schema=state["schema"], question=state["question"],
+        schema=state["schema"], question=_sql_task(state),
         failed_sql=state.get("sql", ""), problem=state.get("error", ""),
         semantic_block=block,
     )
@@ -255,10 +271,10 @@ def _generate_with_tools(state: AgentState, model, attempts: int, requested: lis
         catalog=", ".join(sorted(t.name for t in tables)), schema=state["schema"],
         semantic_block=block)
     if attempts == 0:
-        human = state["question"]
+        human = _sql_task(state)
     else:
         human = REPAIR_INSTRUCTION.format(
-            question=state["question"], failed_sql=state.get("sql", ""),
+            question=_sql_task(state), failed_sql=state.get("sql", ""),
             problem=state.get("error", ""), semantic_block=block)
     messages = [SystemMessage(content=system), HumanMessage(content=human)]
 
@@ -352,6 +368,104 @@ def _validate(state: AgentState) -> dict:
     }
 
 
+def _planner(state: AgentState, config=None) -> dict:
+    model = state.get("model") or _model_for_state(state, config)
+    block = ""
+    if state.get("semantic_layer"):
+        block = _metric_registry().format(_semantic_metrics(state))
+    plan = plan_query(state["question"], state["schema"], model, semantic_block=block,
+                      feedback=state.get("error") or "")   # replan with the reject reason
+    attempts = state.get("plan_attempts", 0) + 1
+    return {"plan": serialize_plan(plan), "plan_attempts": attempts, "step_index": 0,
+            "step_results": [], "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],
+                                           "attempt": attempts}]}
+
+
+def _plan_validate(state: AgentState) -> dict:
+    v = validate_plan(deserialize_plan(state["plan"]))
+    return {"error": None if v.ok else v.reason,
+            "trace": [{"node": "plan_validate", "ok": v.ok, "reason": v.reason}]}
+
+
+def _current_step(state: AgentState) -> dict:
+    return state["plan"][state["step_index"]]
+
+
+def _sql_task(state: AgentState) -> str:
+    """What the SQL step should generate for. In a multi-step plan the planner may
+    decompose the SQL step (e.g. "pull raw monthly rows"); surface that instruction
+    alongside the original question so the SQL is driven by the step, not only the
+    overall question. Falls back to the question when there is no plan (direct callers).
+    Keeping the question as the anchor and adding the instruction as context is the
+    conservative fix; fully instruction-driven generation is a later refinement (it
+    needs real-model checking that the planner emits faithful SQL instructions)."""
+    plan = state.get("plan")
+    if not plan:
+        return state["question"]
+    instruction = (plan[state.get("step_index", 0)] or {}).get("instruction", "")
+    if instruction.strip():
+        return f"{state['question']}\n\nFor this step: {instruction}"
+    return state["question"]
+
+
+def _dispatch_step(state: AgentState) -> dict:
+    step = _current_step(state)
+    # reset per-step SQL/python retry counters at the start of each step
+    reset = {"attempts": 0, "python_attempts": 0, "error": None}
+    reset["trace"] = [{"node": "dispatch", "step_index": state["step_index"], "kind": step["kind"]}]
+    return reset
+
+
+def _python_generate(state: AgentState, config=None) -> dict:
+    model = state.get("model") or _model_for_state(state, config)
+    prior = state["result"]                       # the single SQL step's ExecutionResult
+    prev_err, prev_code = "", ""
+    if state.get("python_attempts", 0) > 0:       # a retry: feed the failure back so it
+        prev_err = (state.get("python_analysis") or {}).get("error", "")  # fixes, not repeats
+        prev_code = state.get("python_code", "")
+    code = generate_python(_current_step(state)["instruction"], prior, model,
+                           previous_error=prev_err, previous_code=prev_code)
+    attempts = state.get("python_attempts", 0) + 1
+    return {"python_code": code, "python_attempts": attempts,
+            "trace": [{"node": "python_generate", "attempt": attempts}]}
+
+
+def _python_execute(state: AgentState) -> dict:
+    prior = state["result"]
+    # `truncated` tells the analysis code (and, via _respond, the user) that these rows
+    # are only the first max_rows of a larger result -- so the analysis isn't silently
+    # computed on a partial sample.
+    payload = {"columns": prior.columns, "rows": [list(r) for r in prior.rows],
+               "truncated": prior.truncated}
+    sandbox = run_in_sandbox(state["python_code"], payload)
+    return {"python_analysis": {"_sandbox_ok": sandbox.ok, "stdout": sandbox.stdout,
+                                "stderr": sandbox.stderr, "error": sandbox.error},
+            "trace": [{"node": "python_execute", "ok": sandbox.ok}]}
+
+
+def _python_analyze(state: AgentState) -> dict:
+    raw = state["python_analysis"]
+    parsed = analyze_python_output(SandboxResult(
+        raw["_sandbox_ok"], stdout=raw.get("stdout", ""), stderr=raw.get("stderr", ""),
+        error=raw.get("error", "")))
+    return {"python_analysis": parsed,
+            "error": None if parsed["ok"] else parsed["error"],
+            "trace": [{"node": "python_analyze", "ok": parsed["ok"]}]}
+
+
+def _step_advance(state: AgentState) -> dict:
+    step = _current_step(state)
+    if step["kind"] == "sql":
+        record = {"kind": "sql", "sql": state.get("sql", ""),
+                  "rows": len(state["result"].rows) if state.get("result") else 0}
+    else:
+        record = {"kind": "python", "analysis": state.get("python_analysis", {}).get("analysis")}
+    results = state.get("step_results", []) + [record]
+    return {"step_results": results, "step_index": state["step_index"] + 1,
+            "attempts": 0, "python_attempts": 0, "error": None,
+            "trace": [{"node": "step_advance", "completed": step["kind"]}]}
+
+
 def _respond(state: AgentState) -> dict:
     if state.get("error"):                              # exhausted the repair budget
         return {"answer": f"I couldn't answer that reliably: {state['error']}.",
@@ -362,7 +476,17 @@ def _respond(state: AgentState) -> dict:
                 "trace": [{"node": "respond", "refused": True,
                            "governance": "blocked",
                            "blocked_columns": governance.columns}]}
-    return {"answer": _format_answer(state["result"]), "trace": [{"node": "respond"}]}
+    answer = _format_answer(state["result"])
+    if "python_analysis" not in state:                  # SQL-only: answer AND trace unchanged
+        return {"answer": answer, "trace": [{"node": "respond"}]}
+    analysis = (state.get("python_analysis") or {}).get("analysis")   # a Python step ran
+    answer = f"{answer}\nAnalysis: {analysis}"
+    truncated = state["result"].truncated
+    if truncated:                                       # be honest: analysis on a sample
+        answer += (f"\n(Note: this analysis is based on the first {len(state['result'].rows)} "
+                   "rows; the query result was truncated.)")
+    return {"answer": answer,
+            "trace": [{"node": "respond", "python_analysis": True, "truncated": truncated}]}
 
 
 def _route_after_clarify(state: AgentState) -> str:
@@ -372,7 +496,7 @@ def _route_after_clarify(state: AgentState) -> str:
 
 
 def _route_after_retrieve(state: AgentState) -> str:
-    return "generate_sql" if state.get("retrieved_tables") else END
+    return "planner" if state.get("retrieved_tables") else END
 
 
 def _route_after_generate(state: AgentState) -> str:
@@ -380,9 +504,21 @@ def _route_after_generate(state: AgentState) -> str:
     return END if state.get("answer") else "execute"
 
 
-def _route_after_validate(state: AgentState) -> str:
+def _route_after_plan_validate(state: AgentState) -> str:
     if not state.get("error"):
+        return "dispatch"
+    if state.get("plan_attempts", 0) >= MAX_PLAN_ATTEMPTS:   # bounded: give up and refuse
         return "respond"
+    return "planner"                                         # replan with a fresh attempt
+
+
+def _route_dispatch(state: AgentState) -> str:
+    return "python_generate" if _current_step(state)["kind"] == "python" else "generate_sql"
+
+
+def _route_after_sql_validate(state: AgentState) -> str:
+    if not state.get("error"):
+        return "step_advance"
     if state.get("repair_kind") == "governance_block":
         return "respond"
     if state.get("attempts", 0) >= MAX_ATTEMPTS:       # bounded: give up and refuse
@@ -390,26 +526,62 @@ def _route_after_validate(state: AgentState) -> str:
     return "generate_sql"                              # repair: re-enter with the hint
 
 
+def _route_after_python_analyze(state: AgentState) -> str:
+    if not state.get("error"):
+        return "step_advance"
+    if state.get("python_attempts", 0) >= MAX_ATTEMPTS:   # bounded: give up and refuse
+        return "respond"
+    return "python_generate"                              # repair: re-generate with the failure
+
+
+def _route_after_step_advance(state: AgentState) -> str:
+    return "dispatch" if state["step_index"] < len(state["plan"]) else "respond"
+
+
 def _build(*, checkpointer=None):
     g = StateGraph(AgentState)
     g.add_node("preflight_context", _preflight_context)
     g.add_node("clarify_check", _clarify_check)
     g.add_node("retrieve_schema", _retrieve_schema)
+    g.add_node("planner", _planner)
+    g.add_node("plan_validate", _plan_validate)
+    g.add_node("dispatch", _dispatch_step)
     g.add_node("generate_sql", _generate_sql)
     g.add_node("execute", _execute)
     g.add_node("validate", _validate)
+    g.add_node("python_generate", _python_generate)
+    g.add_node("python_execute", _python_execute)
+    g.add_node("python_analyze", _python_analyze)
+    g.add_node("step_advance", _step_advance)
     g.add_node("respond", _respond)
     g.add_edge(START, "preflight_context")
     g.add_edge("preflight_context", "clarify_check")
     g.add_conditional_edges("clarify_check", _route_after_clarify,
                             {"retrieve_schema": "retrieve_schema", END: END})
+    # retrieve_schema now routes into the planner instead of generate_sql:
     g.add_conditional_edges("retrieve_schema", _route_after_retrieve,
-                            {"generate_sql": "generate_sql", END: END})
+                            {"planner": "planner", END: END})
+    g.add_edge("planner", "plan_validate")
+    g.add_conditional_edges("plan_validate", _route_after_plan_validate,
+                            {"dispatch": "dispatch", "planner": "planner", "respond": "respond"})
+    g.add_conditional_edges("dispatch", _route_dispatch,
+                            {"generate_sql": "generate_sql", "python_generate": "python_generate"})
+    # generate_sql keeps its decline short-circuit EXPLICITLY: on CANNOT_ANSWER it sets
+    # `answer` and _route_after_generate routes to END; otherwise it proceeds to execute.
     g.add_conditional_edges("generate_sql", _route_after_generate,
                             {"execute": "execute", END: END})
     g.add_edge("execute", "validate")
-    g.add_conditional_edges("validate", _route_after_validate,
-                            {"respond": "respond", "generate_sql": "generate_sql"})
+    # SQL step tail: validate now advances the step instead of responding
+    g.add_conditional_edges("validate", _route_after_sql_validate,
+                            {"step_advance": "step_advance", "generate_sql": "generate_sql",
+                             "respond": "respond"})
+    g.add_edge("python_generate", "python_execute")
+    g.add_edge("python_execute", "python_analyze")
+    g.add_conditional_edges("python_analyze", _route_after_python_analyze,
+                            {"step_advance": "step_advance", "python_generate": "python_generate",
+                             "respond": "respond"})
+    g.add_conditional_edges("step_advance", _route_after_step_advance,
+                            {"dispatch": "dispatch", "respond": "respond"})
     g.add_edge("respond", END)
     return g.compile(checkpointer=checkpointer)
 

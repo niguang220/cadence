@@ -26,10 +26,14 @@ def _registry_must_not_be_used():
 
 
 class CapturingModel:
-    """Fake model: records prompts, returns trivial SQL. No bind_tools -> plain path."""
+    """Fake model: records prompts, returns trivial SQL. No bind_tools -> plain path.
+    Plan-aware: a planner prompt yields one SQL step so generation still runs."""
     def __init__(self): self.prompts = []
     def invoke(self, prompt):
-        self.prompts.append(prompt if isinstance(prompt, str) else str(prompt))
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        self.prompts.append(text)
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": "SELECT 1"})()
 
 def test_semantic_block_injected_when_on(tmp_path, monkeypatch):
@@ -58,10 +62,16 @@ def test_semantic_block_persists_on_repair(tmp_path, monkeypatch):
     monkeypatch.setattr(graphmod, "_metric_registry", lambda: registry)
     db = str(build(tmp_path / "saas.db"))
     class FailThenOK:                          # 1st SQL fails -> forces a repair turn
-        def __init__(self): self.prompts=[]; self.n=0
+        # Plan-aware: the planner is the first invoke (counted in n) but yields a plan,
+        # not SQL; _gen indexes generations so the FIRST generation still fails.
+        def __init__(self): self.prompts=[]; self.n=0; self._gen=0
         def invoke(self, p):
-            self.prompts.append(p if isinstance(p,str) else str(p)); self.n+=1
-            return type("R",(),{"content": "SELECT * FROM nope" if self.n==1 else "SELECT 1"})()
+            text = p if isinstance(p,str) else str(p)
+            self.prompts.append(text); self.n+=1
+            if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+                return type("R",(),{"content": '[{"kind": "sql", "instruction": "x"}]'})()
+            self._gen += 1
+            return type("R",(),{"content": "SELECT * FROM nope" if self._gen==1 else "SELECT 1"})()
         def bind(self, **k): return self
     m = FailThenOK()
     answer_question(db, "what is our MRR by region?", model=m, semantic_layer=True)

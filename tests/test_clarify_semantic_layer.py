@@ -16,7 +16,13 @@ def _active_registry():
     return StubMetricRegistry()
 
 class Fake:
-    def invoke(self, p): return type("R", (), {"content": "SELECT 1"})()
+    def invoke(self, p):
+        text = p if isinstance(p, str) else str(p)
+        # plan-aware: the first model call is the planner; yield one SQL step so
+        # generation still runs and reaches generate_sql.
+        if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
+            return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
+        return type("R", (), {"content": "SELECT 1"})()
 
 ACTIVE_Q = "How many active users did we have as of 2025-06-30?"
 

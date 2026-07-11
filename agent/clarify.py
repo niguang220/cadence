@@ -40,7 +40,7 @@ def detect_ambiguity(question: str) -> str | None:
     vague = next((w for w in _VAGUE if re.search(rf"\b{w}\b", q)), None)
     if vague and not any(hint in q for hint in _METRIC_HINTS):
         # message is intentionally entity-neutral (not schema-aware): the value is
-        # that the agent asks at all. Tailoring options to the entity is Phase 4.
+        # that the agent asks at all. Tailoring options to the entity is a future upgrade.
         return (f'"{vague}" can be measured several ways (e.g. by a total amount, '
                 f'by a count, or by a rating). Which metric do you mean?')
     return None
