@@ -19,6 +19,12 @@ def test_ambiguous_but_data_stays_data():
     assert classify_intent("best customers").kind == "data"
 
 
+def test_polite_prefixed_data_question_stays_in_scope():
+    # regression: a greeting/politeness PREFIX on a real data question must NOT be refused.
+    assert classify_intent("Hi, how many accounts do we have?").kind == "data"
+    assert classify_intent("Thanks, show this month's MRR").kind == "data"
+
+
 def test_empty_question_is_out_of_scope():
     v = classify_intent("")
     assert v.kind == "out_of_scope" and v.reason
