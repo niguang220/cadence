@@ -61,6 +61,15 @@ def test_enhance_unparseable_falls_back_to_original():
     assert r.enhanced_question == "count users" and r.rewrite_diff == ""
 
 
+def test_short_alias_matches_on_word_boundary_not_substring():
+    # a short alias "arr" must NOT match inside "array" -- a substring match would wrongly
+    # think the metric was dropped and disable the enhancement (fall back to original).
+    m = _Fake('{"enhanced_question": "show element counts"}')
+    metric = _metric("mrr", aliases=["arr"])
+    r = enhance_query("show array sizes", [metric], m)
+    assert r.enhanced_question == "show element counts" and not r.warnings
+
+
 # --- graph boundary: the original/enhanced split -------------------------------
 
 def test_enhanced_noop_keeps_sql_task_and_retrieval_byte_identical():

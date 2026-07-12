@@ -4,6 +4,7 @@ preserved (kept in state for the answer/trace). This is the ONLY pre-step LLM no
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from agent.prompts import QUERY_ENHANCE_PROMPT
@@ -33,11 +34,16 @@ def enhance_query(question: str, metrics: list[MetricDef], model) -> EnhanceResu
     # guardrail: a metric is "dropped" if ANY of its surface forms (canonical name OR an
     # alias) was in the question but NONE survives in the rewrite. Aliases matter -- real
     # configs rely on them, and a question often hits an alias, not the canonical name.
+    def _present(text: str, term: str) -> bool:
+        # word-boundary match (like metric retrieval), so a short alias "arr" does not
+        # match inside "array" and wrongly disable the enhancement.
+        return re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE) is not None
+
     dropped = []
     for met in metrics:
         forms = [met.name, *met.aliases]
-        if (any(f.lower() in question.lower() for f in forms)
-                and not any(f.lower() in enhanced.lower() for f in forms)):
+        if (any(_present(question, f) for f in forms)
+                and not any(_present(enhanced, f) for f in forms)):
             dropped.append(met.name)
     if dropped:
         warnings.append(f"rewrite dropped governed term(s) {dropped}; kept original")
