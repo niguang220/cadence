@@ -1,4 +1,4 @@
-"""Tests for the demo DB build + schema introspection (Phase 1, PR #1).
+"""Tests for the demo DB build + schema introspection.
 
 Contract tests on the *shape* the rest of the project relies on — pinned
 edge-case fixtures, FK integrity, the invoice-total invariant, schema-linking

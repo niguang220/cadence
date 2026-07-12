@@ -1,0 +1,18 @@
+[
+  {"id": "empty", "question": "", "expected_route": "out_of_scope"},
+  {"id": "greeting_only", "question": "hi there", "expected_route": "out_of_scope"},
+  {"id": "hello", "question": "hello", "expected_route": "out_of_scope"},
+  {"id": "good_morning", "question": "good morning", "expected_route": "out_of_scope"},
+  {"id": "meta_capabilities", "question": "what can you do?", "expected_route": "out_of_scope"},
+  {"id": "meta_identity", "question": "who are you?", "expected_route": "out_of_scope"},
+
+  {"id": "weather", "question": "what's the weather today?", "expected_route": "feasibility_refuse", "recalled_tables": [], "note": "non-greeting out-of-domain: intent passes by design, feasibility refuses on empty recall"},
+  {"id": "stock_price", "question": "what is the stock price of apple?", "expected_route": "feasibility_refuse", "recalled_tables": []},
+  {"id": "thanks_a_lot", "question": "thanks a lot", "expected_route": "feasibility_refuse", "recalled_tables": [], "note": "documents the intent gate's limit: 'a'/'lot' are non-filler so intent lets it through; feasibility catches it -- NOT mislabeled out_of_scope"},
+
+  {"id": "accounts", "question": "how many accounts do we have?", "expected_route": "proceed", "recalled_tables": ["account"]},
+  {"id": "total_mrr", "question": "what is our total mrr?", "expected_route": "proceed", "recalled_tables": ["subscription"]},
+  {"id": "greeting_prefix_data", "question": "hi, how many accounts do we have?", "expected_route": "proceed", "recalled_tables": ["account"], "note": "near-miss: a greeting PREFIX on a data question must NOT refuse (refuse-precision teeth)"},
+  {"id": "meta_phrase_inside_data", "question": "how many accounts mention 'what can you do' in their notes?", "expected_route": "proceed", "recalled_tables": ["account"], "note": "near-miss: a meta phrase INSIDE a data question must NOT refuse (refuse-precision teeth)"},
+  {"id": "risk_missing_join", "question": "how many active users are there per account?", "expected_route": "proceed", "recalled_tables": ["activity_event", "account"], "paths": [], "note": ">1 recalled table with no direct FK edge -> proceed WITH a possible_missing_join risk (asserted in the test)"}
+]

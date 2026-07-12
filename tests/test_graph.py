@@ -1,4 +1,4 @@
-"""Tests for the Phase 2 reliability loop (validate_result + self-correction).
+"""Tests for the reliability loop (validate_result + self-correction).
 
 Unit tests pin each validate rule; integration tests drive the whole graph with a
 fake model that returns a *sequence* of replies, so we can prove it self-corrects
