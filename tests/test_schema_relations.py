@@ -18,3 +18,22 @@ def test_no_join_path_when_tables_unrelated(tmp_path):
     # a single table has no join path to anything in the recalled set
     solo = [tables[0].name]
     assert join_paths(tables, solo) == []
+
+
+def test_join_path_carries_both_columns_when_fk_names_differ():
+    # a synthetic FK whose two column names DIFFER -- the SaaS fixture happens to use the
+    # same name both ends, so this pins that ``ref_on`` is the parent column, not the child.
+    from agent.db.introspect import Table, ForeignKey
+    child = Table(name="child", foreign_keys=[ForeignKey("parent_ref", "parent", "id")])
+    parent = Table(name="parent")
+    assert join_paths([child, parent], ["child", "parent"]) == [
+        {"from": "child", "to": "parent", "on": "parent_ref", "ref_on": "id"}]
+
+
+def test_table_relation_renders_a_complete_join_condition():
+    from agent.db.introspect import Table, ForeignKey
+    from agent.graph import _table_relation
+    child = Table(name="child", foreign_keys=[ForeignKey("parent_ref", "parent", "id")])
+    out = _table_relation({"tables": [child, Table(name="parent")],
+                           "retrieved_tables": ["child", "parent"], "schema": "S"})
+    assert "child.parent_ref = parent.id" in out["schema"]   # from.on = to.ref_on
