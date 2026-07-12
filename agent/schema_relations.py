@@ -18,5 +18,6 @@ def join_paths(tables: list[Table], recalled: list[str]) -> list[dict]:
             continue
         for fk in t.foreign_keys:
             if fk.ref_table in recalled_set:
-                paths.append({"from": name, "to": fk.ref_table, "on": fk.column})
+                paths.append({"from": name, "to": fk.ref_table,
+                              "on": fk.column, "ref_on": fk.ref_column})
     return paths

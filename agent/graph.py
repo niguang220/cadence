@@ -306,7 +306,7 @@ def _table_relation(state: AgentState) -> dict:
         "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}],
     }
     if paths:
-        hint = "\n".join(f"{p['from']} -> {p['to']} (on {p['on']})" for p in paths)
+        hint = "\n".join(f"{p['from']}.{p['on']} = {p['to']}.{p['ref_on']}" for p in paths)
         out["schema"] = f"{state['schema']}\n\nJoin paths:\n{hint}"
     return out
 
