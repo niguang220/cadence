@@ -1,4 +1,4 @@
-"""Tests for the semantic / hybrid schema retriever (Phase 3).
+"""Tests for the semantic / hybrid schema retriever.
 
 The fusion maths and the two guardrails -- off-topic refusal and graceful fallback
 to lexical when the embedding backend is unavailable -- are deterministic and need

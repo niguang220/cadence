@@ -1,4 +1,4 @@
-"""Tests for the baseline NL->SQL pipeline (Phase 1, PR #4).
+"""Tests for the baseline NL->SQL pipeline.
 
 The LLM is faked (a model that returns a fixed string), so these run with no API
 key and no tokens; the retrieval, safety and execution around it are real.

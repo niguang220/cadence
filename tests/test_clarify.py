@@ -1,4 +1,4 @@
-"""Tests for ambiguity clarification (PR #8).
+"""Tests for ambiguity clarification.
 
 Unit tests pin the heuristic; an end-to-end test proves the agent asks (and does
 NOT call the model) when the question is ambiguous, and still answers a clear one.

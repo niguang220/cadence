@@ -1,4 +1,4 @@
-"""Tests for read-only SQL execution (Phase 1, PR #3)."""
+"""Tests for read-only SQL execution."""
 from agent.db.build_demo_db import build
 from agent.execution import run_query
 

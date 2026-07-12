@@ -1,4 +1,4 @@
-"""Tests for the SQL safety gate (Phase 1, PR #3)."""
+"""Tests for the SQL safety gate."""
 import pytest
 
 from agent.safety import check_sql_safety

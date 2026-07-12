@@ -1,4 +1,4 @@
-"""Tests for the lexical schema retriever (Phase 1, PR #2)."""
+"""Tests for the lexical schema retriever."""
 from agent.db.build_demo_db import build
 from agent.db.introspect import introspect
 from agent.lexical_retriever import retrieve_tables
