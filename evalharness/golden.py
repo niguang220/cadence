@@ -102,6 +102,17 @@ def load_sandbox(path: Path = SANDBOX_PATH) -> list[SandboxCase]:
             raise ValueError(f"{path}: case {c.id!r} input needs 'columns' and 'rows'")
         if c.input.get("truncated"):
             raise ValueError(f"{path}: case {c.id!r} input.truncated must be false (full results only)")
-        if isinstance(c.expected_output, dict) and "chart" in c.expected_output:
-            raise ValueError(f"{path}: case {c.id!r} expected_output must not contain a chart")
+        if _contains_chart(c.expected_output):
+            raise ValueError(f"{path}: case {c.id!r} expected_output must not contain a chart (at any depth)")
     return cases
+
+
+def _contains_chart(obj) -> bool:
+    """True if a "chart" key appears anywhere in ``obj`` (charts are not a supported oracle).
+    Recursive so a nested chart can't slip past into the comparator, where its ValueError
+    would be misattributed to the model's output rather than the (invalid) fixture."""
+    if isinstance(obj, dict):
+        return "chart" in obj or any(_contains_chart(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_contains_chart(v) for v in obj)
+    return False

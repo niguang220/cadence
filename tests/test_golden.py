@@ -72,3 +72,12 @@ def test_sandbox_rejects_chart_expected(tmp_path):
              "expected_output": {"chart": "iVBOR"}}]
     with pytest.raises(ValueError, match="chart"):
         load_sandbox(_write(tmp_path, data))
+
+
+def test_sandbox_rejects_nested_chart_expected(tmp_path):
+    # a chart nested below the top level must also be rejected, or the comparator's
+    # ValueError would later be misattributed to the model instead of the bad fixture
+    data = [{"id": "s", "instruction": "i", "input": {"columns": ["a"], "rows": [[1]]},
+             "expected_output": {"rows": [{"chart": "iVBOR"}]}}]
+    with pytest.raises(ValueError, match="chart"):
+        load_sandbox(_write(tmp_path, data))

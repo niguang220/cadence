@@ -6,11 +6,15 @@ model to generate the program, run it in the PRODUCTION Docker sandbox, parse, a
 compare against the gold with the case tolerance.
 
 Only the computation cases are measured -- the ``adv_*`` fixtures exist solely for the CI
-teeth (validate_wrong_program) and would double-weight the real task shapes. A MODEL
-failure (bad program: non-zero exit / timeout / non-JSON / unexpected shape) counts as
-``matched=False`` and stays in the denominator (pass@1, no survivorship bias); only an
-INFRASTRUCTURE failure (Docker unavailable, or a model/API error raised by generate_python)
-aborts the whole run.
+teeth (validate_wrong_program) and would double-weight the real task shapes.
+
+Infrastructure vs. model failure is decided by a **preflight**, not by parsing error
+strings (a down daemon and a missing image both surface as "sandbox exited non-zero", so
+string-matching would miscount them as model misses and emit a fake match_rate). A trivial
+container runs once before measuring: if it fails (daemon down / image missing / cannot
+start) the whole run ABORTS with no score. After preflight succeeds, a per-case sandbox
+failure (non-zero exit / timeout / non-JSON / unexpected shape) is a MODEL failure ->
+matched=False, kept in the denominator.
 """
 from __future__ import annotations
 
@@ -21,7 +25,18 @@ from evalharness.computation_oracle import computation_match
 from evalharness.sandbox_eval import SandboxOutcome
 
 
+def _preflight_docker() -> None:
+    """Prove the daemon + image are up by actually starting a trivial container.
+    A preflight failure is INFRASTRUCTURE, not a model miss, so it aborts the run."""
+    probe = run_in_sandbox("import sys; sys.stdout.write('{}')", {"columns": [], "rows": []})
+    if not probe.ok:
+        raise RuntimeError(
+            "sandbox preflight failed -- Docker daemon or image unavailable "
+            f"({probe.error}: {probe.stderr.strip()[:200]}); refusing to emit a measured score")
+
+
 def run_sandbox(cases, model) -> list[SandboxOutcome]:
+    _preflight_docker()                        # infra up? else abort with no score
     outcomes = []
     for case in cases:
         if case.wrong_program:                 # adversarial fixture: CI teeth only, never measured
@@ -31,9 +46,8 @@ def run_sandbox(cases, model) -> list[SandboxOutcome]:
         program = generate_python(case.instruction, sql_result, model)   # API error -> raises (infra)
         sandbox = run_in_sandbox(program, {"columns": sql_result.columns, "rows": sql_result.rows})
         if not sandbox.ok:
-            if sandbox.error == "docker not available":
-                raise RuntimeError("Docker is not available -- cannot run the sandbox surface")
-            # a non-zero exit / timeout is a MODEL failure: count it as unmatched, do not abort.
+            # preflight already proved infra is up, so a per-case failure is the MODEL's
+            # program (non-zero exit / timeout): count it as unmatched, do not abort.
             outcomes.append(SandboxOutcome(case.id, matched=False, error=sandbox.error or "sandbox failed"))
             continue
         parsed = analyze_python_output(sandbox)
@@ -42,7 +56,7 @@ def run_sandbox(cases, model) -> list[SandboxOutcome]:
             continue
         try:
             matched = computation_match(parsed["analysis"], case.expected_output, tolerance=case.tolerance)
-        except ValueError as exc:              # unexpected output shape (e.g. a chart) -> model failure
+        except ValueError as exc:              # unexpected PREDICTED shape (e.g. a chart) -> model failure
             outcomes.append(SandboxOutcome(case.id, matched=False, error=str(exc)))
             continue
         outcomes.append(SandboxOutcome(case.id, matched=matched))
