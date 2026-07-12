@@ -1,0 +1,9 @@
+[
+  {"id": "adv_measure_sum_for_avg", "question": "What is the average MRR of our active subscriptions?", "candidate_sql": "SELECT SUM(mrr) FROM subscription WHERE ended_on IS NULL", "gold_sql": "SELECT AVG(mrr) FROM subscription WHERE ended_on IS NULL", "category": "measure", "expected_caught": true, "note": "question asks average, SQL sums"},
+  {"id": "adv_grain_total_for_per_region", "question": "What is our MRR broken down by region?", "candidate_sql": "SELECT SUM(s.mrr) FROM subscription s WHERE s.ended_on IS NULL", "gold_sql": "SELECT a.region, SUM(s.mrr) FROM subscription s JOIN account a ON a.account_id = s.account_id WHERE s.ended_on IS NULL GROUP BY a.region", "category": "grain", "expected_caught": true, "note": "question asks per-region, SQL returns a single total"},
+  {"id": "adv_entity_users_for_accounts", "question": "How many accounts do we have?", "candidate_sql": "SELECT COUNT(*) FROM \"user\"", "gold_sql": "SELECT COUNT(*) FROM account", "category": "entity", "expected_caught": true, "note": "question asks accounts, SQL counts users"},
+  {"id": "adv_dropped_region_filter", "question": "How many accounts are in the us-east region?", "candidate_sql": "SELECT COUNT(*) FROM account", "gold_sql": "SELECT COUNT(*) FROM account WHERE region = 'us-east'", "category": "dropped_filter", "expected_caught": true, "note": "question states us-east, SQL drops the region filter"},
+
+  {"id": "clean_account_count", "question": "How many accounts do we have?", "candidate_sql": "SELECT COUNT(*) FROM account", "gold_sql": "SELECT COUNT(*) FROM account", "category": "", "expected_caught": false},
+  {"id": "clean_active_mrr_total", "question": "What is our total MRR from active subscriptions?", "candidate_sql": "SELECT SUM(mrr) FROM subscription WHERE ended_on IS NULL", "gold_sql": "SELECT SUM(mrr) FROM subscription WHERE ended_on IS NULL", "category": "", "expected_caught": false}
+]
