@@ -525,14 +525,13 @@ def _plan_approval(state: AgentState) -> dict:
     """HITL gate AFTER plan_validate: pause with an EDITABLE plan and let a human
     approve / edit / reject before anything executes. Reached ONLY in HITL -- a
     non-HITL run routes plan_validate straight to dispatch, so the baseline is
-    byte-identical. Deterministic (validate_plan + assess_feasibility), so it needs
-    no model.
+    byte-identical. Deterministic (validate_plan only), so it needs no model.
 
     An EDIT is never trusted just because the original plan passed: it is re-validated
-    with ``validate_plan`` (shape + non-empty instructions) and then ``assess_feasibility``
-    (a defensive consistency check -- recall/paths are unchanged by a plan edit, so it
-    passes in practice; a structurally-valid-but-semantically-off edit is NOT gated here,
-    it surfaces downstream). Resume value is a dict:
+    STRUCTURALLY with ``validate_plan`` (shape + non-empty instructions). Feasibility is
+    NOT re-run -- it is question-driven and the question is unchanged by an edit, so it
+    would be vacuous; a structurally-valid-but-semantically-off edit is not gated here, it
+    surfaces downstream. Resume value is a dict (or a bare "approve"/"reject" string):
     ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}``.
 
     Bounded (Critical): a still-invalid edit re-interrupts with the reason, but only up to
