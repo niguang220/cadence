@@ -550,7 +550,11 @@ def _plan_approval(state: AgentState) -> dict:
         payload = {"plan": plan, "message": "Approve, edit, or reject this plan."}
         if reason:
             payload["reason"] = reason
-        decision = interrupt(payload) or {}
+        decision = interrupt(payload)
+        if isinstance(decision, str):
+            decision = {"decision": decision}       # tolerate a bare "approve"/"reject"
+        elif not isinstance(decision, dict):
+            decision = {}                            # any other malformed resume -> re-ask
         action = decision.get("decision")
         if action == "approve":
             return {"plan": plan, "approval_attempts": attempts,
@@ -567,17 +571,17 @@ def _plan_approval(state: AgentState) -> dict:
             reason = "" if verdict.ok else verdict.reason
         except (TypeError, ValueError):             # a malformed edit (bad step dict shape)
             edited, reason = None, "edit is not a well-formed plan"
-        if not reason and edited is not None:
-            f = assess_feasibility(state["question"], state["tables"],
-                                   state["retrieved_tables"], _semantic_metrics(state),
-                                   state.get("join_paths", []))
-            if not f.feasible:
-                reason = f.message
-            else:                                   # accepted edit: persist it, then dispatch
-                return {"plan": serialize_plan(edited), "approval_attempts": attempts,
-                        "approval_result": {"decision": "edit", "attempts": attempts},
-                        "trace": [{"node": "plan_approval", "decision": "edit",
-                                   "approved": True, "attempts": attempts}]}
+        if not reason and edited is not None:       # accepted edit: persist it, then dispatch
+            # Edit re-validation is STRUCTURAL only (validate_plan: shape + non-empty
+            # instructions). Feasibility is NOT re-run here -- it is question-driven and the
+            # question is unchanged by an edit, so re-running it would be vacuous (always
+            # feasible). A structurally-valid but semantically-off edit is not
+            # deterministically catchable at this point; it surfaces downstream
+            # (SemanticConsistency / the answer).
+            return {"plan": serialize_plan(edited), "approval_attempts": attempts,
+                    "approval_result": {"decision": "edit", "attempts": attempts},
+                    "trace": [{"node": "plan_approval", "decision": "edit",
+                               "approved": True, "attempts": attempts}]}
         if attempts >= MAX_APPROVAL_ATTEMPTS:       # bounded: stop the human ping-pong
             return _refuse_plan("edit", reason, attempts)
         # else: loop -> interrupt() again, now carrying `reason`

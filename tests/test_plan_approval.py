@@ -2,10 +2,11 @@
 
 After ``plan_validate`` and ONLY in HITL, the graph pauses so a human can approve,
 edit, or reject the validated plan before it executes. An EDIT is re-validated
-(``validate_plan`` + ``assess_feasibility``) -- never trusted just because the
-original plan passed -- and a still-invalid edit re-interrupts with a reason,
-BOUNDED by ``MAX_APPROVAL_ATTEMPTS`` so there is no infinite human ping-pong. A
-non-HITL run never enters this node (baseline byte-identical).
+STRUCTURALLY (``validate_plan``: shape + non-empty instructions) -- never trusted just
+because the original plan passed. (Feasibility is NOT re-run: it is question-driven and
+the question is unchanged by an edit, so it would be vacuous.) A still-invalid edit
+re-interrupts with a reason, BOUNDED by ``MAX_APPROVAL_ATTEMPTS`` so there is no infinite
+human ping-pong. A non-HITL run never enters this node (baseline byte-identical).
 
 A NON-ambiguous question is used so the FIRST interrupt is ``plan_approval`` (not
 ``clarify_check``). ``PlanningFakeModel`` answers both the enhance and planner prompts,
@@ -123,6 +124,18 @@ def test_persistent_invalid_edit_is_bounded_and_refuses(saas_db, monkeypatch):
     assert sandbox == []
     approval = [t for t in result.trace if t.get("node") == "plan_approval"][-1]
     assert approval.get("refused") is True
+
+
+def test_bare_string_decision_is_tolerated(saas_db):
+    # a client that resumes with a bare "approve" (not a {"decision": ...} dict) must not
+    # crash the resume boundary with an AttributeError.
+    model = PlanningFakeModel("SELECT COUNT(*) FROM account")
+    tid, first = start_question_session(saas_db, _Q, model=model)
+
+    _, result = resume_question_session(tid, "approve")
+
+    assert not isinstance(result, dict)             # completed, did not crash
+    assert result.execution.ok
 
 
 def test_non_hitl_run_never_enters_plan_approval(saas_db):
