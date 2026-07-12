@@ -26,11 +26,27 @@ class PlanningFakeModel:
         self._sql = sql
         self.calls = 0
         self.last_prompt = None
+        self.saw_enhance = False
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; recognize it
+        # as a pure SIDE-CHANNEL (does NOT touch calls/last_prompt/index) so it can't
+        # overwrite the generation last_prompt or shift call counts. It returns a
+        # passthrough ok verdict; ``saw_consistency`` records that it fired.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.calls += 1
         self.last_prompt = prompt
-        text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on every full-graph proceed path; a
+        # passthrough (empty enhanced_question -> enhance_query falls back to the
+        # original) leaves everything downstream byte-identical and does NOT consume
+        # the configured SQL.
+        if "governed metric terms" in text:
+            self.saw_enhance = True
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         is_planner = text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text
         content = ('[{"kind": "sql", "instruction": "answer the question"}]'
                    if is_planner else self._sql)

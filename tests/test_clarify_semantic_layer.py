@@ -16,8 +16,19 @@ def _active_registry():
     return StubMetricRegistry()
 
 class Fake:
+    saw_consistency = False
     def invoke(self, p):
         text = p if isinstance(p, str) else str(p)
+        # semantic_consistency is the LAST model call on a validated SQL step; recognize
+        # it as a pure SIDE-CHANNEL passthrough (keeps this fake robust if its SQL ever
+        # reaches the validate-ok path).
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
+        # query_enhance runs first on the proceed path; a passthrough keeps generation
+        # byte-identical.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         # plan-aware: the first model call is the planner; yield one SQL step so
         # generation still runs and reaches generate_sql.
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:

@@ -19,11 +19,23 @@ class FakeModel:
         self._reply = reply
         self.last_prompt = None
         self.calls = 0
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch last_prompt/calls) so it can't overwrite the
+        # generation prompt those tests assert on. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.last_prompt = prompt
         self.calls += 1
-        text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on every proceed path; a passthrough
+        # (empty enhanced_question -> falls back to the original) leaves generation
+        # byte-identical, though ``calls`` still counts it.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self._reply})()
@@ -69,11 +81,16 @@ def test_pipeline_does_not_put_pii_columns_in_prompt(tmp_path):
 
 
 def test_pipeline_refuses_when_no_tables_match(tmp_path):
+    # schema_recall is pure retrieval now; feasibility_assessment owns the
+    # empty-recall refusal (Plan 3 migration).
     from agent.db.build_demo_db import build
     db = build(tmp_path / "t.db")
     res = answer_question(db, "what is the meaning of life", model=FakeModel("SELECT 1"))
     assert res.retrieved_tables == [] and res.sql == ""
-    assert "couldn't identify" in res.answer.lower()
+    feasibility = next(s for s in res.trace if s.get("node") == "feasibility_assessment")
+    assert feasibility.get("refused") is True
+    assert feasibility.get("reason_code") == "no_recalled_tables"
+    assert feasibility["message"] in res.answer
 
 
 def test_pipeline_handles_model_declining_with_cannot_answer(tmp_path):
@@ -100,7 +117,7 @@ def test_pipeline_rejects_generated_pii_sql_without_repairing(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT email FROM customer LIMIT 5")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 2                            # planner + one generation (no repair)
+    assert model.calls == 3                            # enhance + planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     assert "couldn't answer" in res.answer.lower()
@@ -115,7 +132,7 @@ def test_pipeline_result_layer_governance_block_is_traced(tmp_path):
     db = build(tmp_path / "t.db")
     model = FakeModel("SELECT 'redacted' AS email FROM customer LIMIT 1")
     res = answer_question(db, "show customer emails", model=model)
-    assert model.calls == 2                            # planner + one generation (no repair)
+    assert model.calls == 3                            # enhance + planner + one generation (no repair)
     assert not res.execution.ok
     assert "governance violation" in res.execution.error
     execute = next(t for t in res.trace if t["node"] == "execute")

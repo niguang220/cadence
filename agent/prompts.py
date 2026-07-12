@@ -97,6 +97,23 @@ Write a corrected single read-only query.
 SQL:"""
 
 
+# Pre-step rewrite that adds time/entity context so retrieval and generation are less
+# ambiguous. The HARD RULE keeps governed metric terms verbatim so their governed
+# definition still applies -- the rewrite adds context only, it must not redefine them.
+QUERY_ENHANCE_PROMPT = """Rewrite the question to be clearer for a SQL analyst: resolve \
+relative time ("this month" -> keep the phrase but make the intent explicit), expand \
+obvious abbreviations, and fold in any clarification already given. Add context only.
+
+HARD RULE: do NOT redefine or reinterpret these governed metric terms -- keep them \
+verbatim so their governed definition still applies: {governed_terms}
+
+Return ONLY a JSON object: {{"enhanced_question": "...", "rewrite_diff": "<what changed>", \
+"warnings": []}}
+
+Question: {question}
+JSON:"""
+
+
 PLANNER_PROMPT = """You plan how to answer a data question about a SQL database.
 Output a JSON array of steps. Each step is {{"kind": "sql"|"python", "instruction": "..."}}.
 
@@ -112,6 +129,37 @@ Rules:
 
 Question: {question}
 
+JSON:"""
+
+
+# Post-generation check on a SQL step: does the SQL (and the rows it returned) actually
+# answer what the QUESTION asked -- the measure, the entity, the grain? This is the ONLY
+# post-step LLM node; a mismatch feeds back into the SAME generate/repair loop as a
+# structural repair (bounded by the shared attempts budget). The distinctive opening
+# phrase "semantic-consistency judge" is the fake models' discriminator: it appears in NO
+# other prompt, so a test fake can recognize this call as a pure side-channel.
+SEMANTIC_CONSISTENCY_PROMPT = """You are a semantic-consistency judge for a SQL analyst.
+Decide whether the SQL and the rows it returned faithfully answer the QUESTION's intent
+-- the MEASURE (e.g. average vs sum vs count), the ENTITY (which table/thing), and the
+GRAIN (per-row vs aggregated, the time window). Judge intent only; do NOT re-check syntax.
+
+Be conservative: report a mismatch ONLY when you are confident the result answers a
+different question than the one asked. When unsure, treat it as consistent.
+
+QUESTION: {question}
+
+SQL:
+{sql}
+
+RESULT (columns, then a few rows):
+{result}
+
+Return ONLY a JSON object with exactly these fields:
+{{"ok": true|false, "mismatch_kind": "measure"|"entity"|"grain"|"", \
+"expected": "<what the question asked for>", "observed": "<what the SQL/result gives>", \
+"evidence": "<the SQL fragment or column that shows it>", \
+"repair_hint": "<one concrete instruction to fix the SQL>"}}
+When ok is true, the other fields may be empty strings.
 JSON:"""
 
 

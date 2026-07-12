@@ -23,7 +23,7 @@ def _json_arrays(text: str):
             data = json.loads(fence.group(1))
             if isinstance(data, list):
                 yield data
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             pass
     decoder = json.JSONDecoder()
     for i, ch in enumerate(text):
@@ -31,7 +31,7 @@ def _json_arrays(text: str):
             continue
         try:
             data, _ = decoder.raw_decode(text[i:])
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             continue
         if isinstance(data, list):
             yield data

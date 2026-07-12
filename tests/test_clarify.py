@@ -20,10 +20,23 @@ class FakeModel:
     def __init__(self, reply: str):
         self._reply = reply
         self.last_prompt = None
+        self.saw_consistency = False
 
     def invoke(self, prompt):
-        self.last_prompt = prompt
         text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch last_prompt) so it can't overwrite the generation
+        # prompt those tests assert on. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
+        self.last_prompt = prompt
+        # query_enhance runs before the planner on the proceed path; a passthrough
+        # (empty enhanced_question -> falls back to the original) keeps generation
+        # byte-identical. On the ask/refuse paths enhance never runs (last_prompt stays
+        # the pre-enhance value), so the "never called the model" assertions still hold.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         # Plan-aware: the planner is the first model call under the step-loop graph;
         # a planner prompt yields a single SQL step so the configured SQL still drives
         # generation (last_prompt is thus the generation prompt, not the plan).
@@ -184,7 +197,11 @@ def test_hitl_clarification_resumes_with_user_metric(tmp_path):
     assert first["question"] == "who are the best customers?"
     assert model.last_prompt is None
 
-    result = resume_question_session(thread_id, "sales")
+    _, mid = resume_question_session(thread_id, "sales")
+    # HITL now interrupts a SECOND time for plan approval after the clarification is
+    # resolved; approve the (unchanged) plan to run it to completion.
+    assert isinstance(mid, dict) and mid.get("plan")
+    _, result = resume_question_session(thread_id, {"decision": "approve"})
 
     assert result.clarification is None
     assert result.execution.ok
@@ -209,7 +226,7 @@ def test_invalid_hitl_clarification_refuses_without_guessing(tmp_path):
     thread_id, first = start_question_session(db, "who are the best customers?", model=model)
     assert isinstance(first, dict)
 
-    result = resume_question_session(thread_id, "profit")
+    _, result = resume_question_session(thread_id, "profit")
 
     assert not result.execution.ok
     assert "couldn't map that clarification" in result.answer.lower()

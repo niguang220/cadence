@@ -30,11 +30,22 @@ class FakeModel:
         self.sql = sql
         self.calls = 0
         self.last_prompt = ""
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch calls/last_prompt) so it can't shift the call
+        # count or overwrite the generation prompt. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.calls += 1
         self.last_prompt = prompt
-        text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on the proceed path (including a HITL
+        # resume); a passthrough keeps generation byte-identical, though ``calls`` counts it.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         return type("R", (), {"content": self.sql})()
@@ -63,9 +74,14 @@ def run_smoke(db_path: str | Path) -> list[str]:
         _check(failures, confidences == {"fallback"}, "schema-derived options should be fallback")
     _check(failures, model.calls == 0, "model should not be called before clarification")
 
-    result = resume_question_session(thread_id, "sales")
+    _, mid = resume_question_session(thread_id, "sales")
+    # HITL now interrupts a second time for plan approval; approve to run the plan.
+    _check(failures, isinstance(mid, dict) and bool(mid.get("plan")),
+           "resolved clarification should pause for plan approval")
+    _, result = resume_question_session(thread_id, {"decision": "approve"})
     _check(failures, result.execution.ok, "valid clarification should resume to execution")
-    _check(failures, model.calls == 2, "valid clarification should call model twice (planner + generation)")
+    _check(failures, model.calls == 3,
+           "valid clarification should call model three times (enhance + planner + generation)")
     _check(failures, "metric: total" in model.last_prompt, "typed intent should reach prompt")
     clarify_trace = next((t for t in result.trace if t.get("node") == "clarify_check" and t.get("resumed")), {})
     _check(failures, clarify_trace.get("intent_verdict") == "ok", "valid clarification intent should be ok")
@@ -73,7 +89,7 @@ def run_smoke(db_path: str | Path) -> list[str]:
     invalid_model = FakeModel("SELECT 1")
     thread_id, first = start_question_session(db, "who are the best customers?", model=invalid_model)
     _check(failures, isinstance(first, dict), "invalid path should start with interrupt")
-    invalid = resume_question_session(thread_id, "profit")
+    _, invalid = resume_question_session(thread_id, "profit")
     _check(failures, not invalid.execution.ok, "invalid clarification should refuse")
     _check(failures, invalid_model.calls == 0, "invalid clarification should not call model")
     invalid_trace = next((t for t in invalid.trace if t.get("node") == "clarify_check" and t.get("resumed")), {})

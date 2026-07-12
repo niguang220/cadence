@@ -4,7 +4,7 @@ One TypedDict flows through every node. ``total=False`` so nodes only return the
 keys they touch; LangGraph merges them. ``trace`` uses an ``operator.add`` reducer
 so each node *appends* its step instead of overwriting the list.
 
-Fields for the reliability loop (``error``, ``retry_count``, ``clarification``) live
+Fields for the reliability loop (``error``, ``attempts``, ``clarification``) live
 here from the start so the loop is a wiring change, not a state-schema change.
 """
 from __future__ import annotations
@@ -29,7 +29,10 @@ class AgentState(TypedDict, total=False):
     thread_id: str                   # HITL session id; used to recover non-serializable runtime objects
 
     # working set
+    enhanced_question: str           # query_enhance's rewrite; feeds retrieval/planner/SQL gen (original kept for the answer/trace)
     retrieved_tables: list[str]
+    join_paths: list[dict]           # table_relation's deterministic FK-edge hints among retrieved_tables
+    feasibility_reason: str          # feasibility_assessment's refusal reason_code (e.g. no_recalled_tables)
     semantic_metrics: list[dict[str, Any]]  # serializable governed metrics bound in preflight
     clarification_options: list[dict[str, Any]]
     clarification_response: str
@@ -46,10 +49,13 @@ class AgentState(TypedDict, total=False):
     plan: list[dict]                 # serialized [{kind, instruction}, ...]
     plan_attempts: int               # planner retries (bounded)
     step_index: int                  # cursor into plan
-    step_results: list[dict]         # per-step output, appended as steps complete
     python_code: str                 # current python step's generated program
     python_attempts: int             # python-step retries (bounded)
     python_analysis: dict            # parsed sandbox output for the current python step
+
+    # plan-approval HITL (Plan 3)
+    approval_attempts: int           # human plan-edit rounds spent (bounded by MAX_APPROVAL_ATTEMPTS)
+    approval_result: dict            # plan_approval outcome (decision/reason) for the trace
 
     # outputs
     answer: str

@@ -1,10 +1,15 @@
 """The agent as a LangGraph state machine (planner-driven step loop).
 
     preflight_context
+    -> intent_recognition --(out_of_scope)--> END (refuse)
     -> clarify_check
-    -> retrieve_schema --(no tables)--> END (refuse)
+    -> schema_recall (pure retrieval; never refuses)
+    -> table_relation
+    -> feasibility_assessment --(no_recalled_tables)--> END (refuse)
     -> planner -> plan_validate --(invalid & attempts<MAX)--> planner
                               \\--(invalid & exhausted)------> respond (refuse)
+    -> plan_approval (HITL only; non-HITL skips straight to dispatch):
+         approve/valid-edit --> dispatch ;  reject/bounded-invalid-edit --> respond (refuse)
     -> dispatch (reads plan[step_index].kind):
          "sql"    -> generate_sql --(CANNOT_ANSWER)--> END (decline)
                      -> execute -> validate --(ok)-----------> step_advance
@@ -49,18 +54,23 @@ from agent.clarify import (
 )
 from agent.db.introspect import introspect, render_schema
 from agent.execution import ExecutionResult, run_query
+from agent.feasibility import assess_feasibility
 from agent.graph_state import AgentState
 from agent.generation import (AnswerResult, _extract_sql, _format_answer, _NO_QUERY,
                              generate_sql)
 from agent.governance import check_result_governance, check_sql_governance
 from agent.hybrid_retriever import retrieve
+from agent.intent import classify_intent
 from agent.observability import setup_phoenix
 from agent.plan import deserialize_plan, serialize_plan, validate_plan
 from agent.planner import plan_query
 from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
                            TOOL_SYSTEM_PROMPT)
 from agent.python_step import analyze_python_output, generate_python
+from agent.query_enhance import enhance_query
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
+from agent.schema_relations import join_paths
+from agent.semantic_consistency import check_semantic_consistency
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
 from agent.usage import UsageCallback
@@ -68,6 +78,8 @@ from agent.validate import validate_result
 
 MAX_ATTEMPTS = 3            # total generations (1 draft + up to 2 repairs)
 MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refuses
+MAX_PYTHON_ATTEMPTS = 3     # python-step retries before the graph gives up and refuses
+MAX_APPROVAL_ATTEMPTS = 2   # human plan-edit rounds before a still-invalid edit is refused
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
@@ -132,6 +144,16 @@ def _preflight_context(state: AgentState) -> dict:
     if not state.get("hitl"):
         out["tables"] = tables
     return out
+
+
+def _intent_recognition(state: AgentState) -> dict:
+    v = classify_intent(state["question"])
+    if v.kind == "out_of_scope":
+        return {"answer": "I can only answer questions about this database's data.",
+                "result": ExecutionResult(False, error=_NO_QUERY),
+                "trace": [{"node": "intent_recognition", "intent_kind": v.kind,
+                           "reason": v.reason, "refused": True}]}
+    return {"trace": [{"node": "intent_recognition", "intent_kind": v.kind}]}
 
 
 def _clarify_check(state: AgentState) -> dict:
@@ -217,28 +239,93 @@ def _resolve_clarification_intent(
     }
 
 
-def _retrieve_schema(state: AgentState) -> dict:
+def _retrieval_question(state: AgentState) -> str:
+    """The question that drives schema recall, planning, and SQL generation.
+
+    query_enhance rewrites the question to add time/entity context; that enhanced form
+    is the retrieval/generation input. The ORIGINAL ``state["question"]`` is untouched
+    and stays the anchor for the answer, the trace, and semantic consistency. When the
+    enhancement is a no-op (empty or identical) this returns the original verbatim, so
+    the baseline stays byte-identical.
+    """
+    return state.get("enhanced_question") or state["question"]
+
+
+def _query_enhance(state: AgentState, config=None) -> dict:
+    """Pre-step LLM rewrite: add context for better retrieval/generation under a
+    governed-metric guardrail. Sets ``enhanced_question`` only -- never overwrites the
+    original ``question``. Gets the model like the other LLM nodes so a HITL resume
+    (checkpoint omits the model) still works."""
+    model = state.get("model") or _model_for_state(state, config)
+    if model is None:
+        raise RuntimeError("No model available for query enhancement")
+    result = enhance_query(state["question"], _semantic_metrics(state), model)
+    entry = {"node": "query_enhance",
+             "enhanced": result.enhanced_question != state["question"],
+             "rewrite_diff": result.rewrite_diff}
+    if result.governed_terms:
+        entry["governed_terms"] = result.governed_terms
+    if result.warnings:
+        entry["warnings"] = result.warnings
+    return {"enhanced_question": result.enhanced_question, "trace": [entry]}
+
+
+def _schema_recall(state: AgentState) -> dict:
+    """Pure retrieval: top-k table recall. Does NOT refuse on empty recall --
+    that decision belongs to feasibility_assessment (the single deterministic
+    refusal owner), which sees this node's empty ``retrieved_tables`` and issues
+    the ``no_recalled_tables`` refusal."""
     tables = state.get("tables")
     if tables is None:
         tables = introspect(state["db_path"])
-    top_k = retrieve(state["question"], tables, k=state.get("k", 5))
+    top_k = retrieve(_retrieval_question(state), tables, k=state.get("k", 5))
     if not top_k:
-        # honest refusal: don't dump the whole schema and let the model
-        # hallucinate a query for an off-topic question.
         return {
             "tables": tables,
             "retrieved_tables": [],
-            "result": ExecutionResult(False, error=_NO_QUERY),
-            "answer": "I couldn't identify any tables relevant to this question.",
-            "trace": [{"node": "retrieve_schema", "tables": [], "retrieval_failed": True}],
+            "schema": "",
+            "trace": [{"node": "schema_recall", "tables": [], "retrieval_failed": True}],
         }
     schema = render_schema(tables, only=top_k, include_fk_neighbors=True)
     return {
         "tables": tables,
         "retrieved_tables": top_k,
         "schema": schema,
-        "trace": [{"node": "retrieve_schema", "tables": top_k}],
+        "trace": [{"node": "schema_recall", "tables": top_k}],
     }
+
+
+def _table_relation(state: AgentState) -> dict:
+    """Deterministic table-relation node: zero LLM. Computes the direct FK-edge
+    join hints among the recalled (top-k) tables and appends a short "Join paths:"
+    hint to the rendered schema -- but only when there is something to hint at, so
+    a recalled set with no direct FK edges leaves the schema byte-identical."""
+    paths = join_paths(state["tables"], state["retrieved_tables"])
+    out = {
+        "join_paths": paths,
+        "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}],
+    }
+    if paths:
+        hint = "\n".join(f"{p['from']}.{p['on']} = {p['to']}.{p['ref_on']}" for p in paths)
+        out["schema"] = f"{state['schema']}\n\nJoin paths:\n{hint}"
+    return out
+
+
+def _feasibility_assessment(state: AgentState) -> dict:
+    """Deterministic feasibility gate: zero LLM. Owns the ONE hard refusal
+    (empty recall, moved here from schema_recall) and traces other signals
+    (e.g. a missing direct join edge) as risk, never as a refusal."""
+    v = assess_feasibility(state["question"], state["tables"], state["retrieved_tables"],
+                           _semantic_metrics(state), state.get("join_paths", []))
+    if not v.feasible:
+        return {
+            "answer": v.message,
+            "result": ExecutionResult(False, error=_NO_QUERY),
+            "feasibility_reason": v.reason_code,
+            "trace": [{"node": "feasibility_assessment", "refused": True,
+                       "reason_code": v.reason_code, "message": v.message}],
+        }
+    return {"trace": [{"node": "feasibility_assessment", "feasible": True, "risks": v.risks}]}
 
 
 def _generate_plain(state: AgentState, model, attempts: int, block: str = "") -> str:
@@ -368,23 +455,135 @@ def _validate(state: AgentState) -> dict:
     }
 
 
+def _semantic_consistency(state: AgentState, config=None) -> dict:
+    """Post-generation LLM check on a validated SQL step: does the SQL (and its rows)
+    answer the QUESTION's intent (measure/entity/grain)? Runs ONLY on the validate-OK
+    path (execute -> validate --(ok)--> here -> step_advance), BEFORE any Python step
+    consumes the rows. A governance_block / exec error / structural repair sets ``error``
+    and is routed away by ``_route_after_sql_validate`` on the error branch, so a
+    governed/blocked result NEVER reaches this judge -- Plan 2's governance invariant.
+
+    Judges the ORIGINAL ``state["question"]`` (the intent anchor), never the enhanced
+    rewrite (judging against the rewrite would be circular). A confident ``not ok`` feeds
+    ``repair_hint`` back as the repair problem via the SHARED ``attempts`` budget; on a
+    parse-failure verdict it fails open (ok) so a broken judge can't block a good query.
+
+    Gets the model like the other LLM nodes so a HITL plan-approval resume (the checkpoint
+    omits the model) still reaches a working judge."""
+    model = state.get("model") or _model_for_state(state, config)
+    if model is None:
+        raise RuntimeError("No model available for semantic consistency")
+    v = check_semantic_consistency(state["question"], state["sql"], state["result"], model)
+    if v.ok:
+        return {"error": None, "trace": [{"node": "semantic_consistency", "ok": True}]}
+    # An explicit not-ok verdict must ALWAYS be a non-empty repair signal: an empty
+    # repair_hint is falsy, and `_route_after_semantic_consistency` routes on `error`
+    # truthiness -- an unguarded empty string would silently step_advance a judge-flagged
+    # mismatch. Default the ROUTED error only; the trace below keeps the real (possibly
+    # empty) repair_hint for observability.
+    error = v.repair_hint or "the result does not match the question's intent"
+    return {"error": error, "repair_kind": "semantic_mismatch",
+            "trace": [{"node": "semantic_consistency", "ok": False,
+                       "mismatch_kind": v.mismatch_kind, "repair_hint": v.repair_hint}]}
+
+
 def _planner(state: AgentState, config=None) -> dict:
     model = state.get("model") or _model_for_state(state, config)
     block = ""
     if state.get("semantic_layer"):
         block = _metric_registry().format(_semantic_metrics(state))
-    plan = plan_query(state["question"], state["schema"], model, semantic_block=block,
+    plan = plan_query(_retrieval_question(state), state["schema"], model, semantic_block=block,
                       feedback=state.get("error") or "")   # replan with the reject reason
     attempts = state.get("plan_attempts", 0) + 1
     return {"plan": serialize_plan(plan), "plan_attempts": attempts, "step_index": 0,
-            "step_results": [], "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],
-                                           "attempt": attempts}]}
+            "trace": [{"node": "planner", "steps": [s.kind for s in plan.steps],
+                      "attempt": attempts}]}
 
 
 def _plan_validate(state: AgentState) -> dict:
     v = validate_plan(deserialize_plan(state["plan"]))
     return {"error": None if v.ok else v.reason,
             "trace": [{"node": "plan_validate", "ok": v.ok, "reason": v.reason}]}
+
+
+def _refuse_plan(decision: str, reason: str, attempts: int) -> dict:
+    """Terminal plan-approval refusal (an explicit reject, or a still-invalid edit past
+    the budget): a declined result plus its trace. respond surfaces the decline sentence
+    verbatim (it is already decided) instead of reformatting the empty result."""
+    return {
+        "answer": "I won't run this plan.",
+        "result": ExecutionResult(False, error=_NO_QUERY),
+        "approval_attempts": attempts,
+        "approval_result": {"decision": decision, "reason": reason, "attempts": attempts,
+                            "refused": True},
+        "trace": [{"node": "plan_approval", "decision": decision, "refused": True,
+                   "reason": reason, "attempts": attempts}],
+    }
+
+
+def _plan_approval(state: AgentState) -> dict:
+    """HITL gate AFTER plan_validate: pause with an EDITABLE plan and let a human
+    approve / edit / reject before anything executes. Reached ONLY in HITL -- a
+    non-HITL run routes plan_validate straight to dispatch, so the baseline is
+    byte-identical. Deterministic (validate_plan only), so it needs no model.
+
+    An EDIT is never trusted just because the original plan passed: it is re-validated
+    STRUCTURALLY with ``validate_plan`` (shape + non-empty instructions). Feasibility is
+    NOT re-run -- it is question-driven and the question is unchanged by an edit, so it
+    would be vacuous; a structurally-valid-but-semantically-off edit is not gated here, it
+    surfaces downstream. Resume value is a dict (or a bare "approve"/"reject" string):
+    ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}``.
+
+    Bounded (Critical): a still-invalid edit re-interrupts with the reason, but only up to
+    ``MAX_APPROVAL_ATTEMPTS`` edit rounds -- once the budget is spent a still-invalid edit
+    is REFUSED, so there is no infinite human ping-pong. The loop calls ``interrupt`` once
+    per round; on resume LangGraph re-executes the node from the top and replays the
+    earlier resume values positionally, so ``attempts`` reconstructs deterministically.
+    Termination is provable: approve / reject / an accepted edit all return, and the only
+    path that loops is a still-invalid edit, which strictly increments ``attempts`` and is
+    refused once ``attempts >= MAX_APPROVAL_ATTEMPTS``."""
+    plan = state["plan"]
+    reason = ""
+    attempts = 0
+    while True:
+        payload = {"plan": plan, "message": "Approve, edit, or reject this plan."}
+        if reason:
+            payload["reason"] = reason
+        decision = interrupt(payload)
+        if isinstance(decision, str):
+            decision = {"decision": decision}       # tolerate a bare "approve"/"reject"
+        elif not isinstance(decision, dict):
+            decision = {}                            # any other malformed resume -> re-ask
+        action = decision.get("decision")
+        if action == "approve":
+            return {"plan": plan, "approval_attempts": attempts,
+                    "approval_result": {"decision": "approve", "attempts": attempts},
+                    "trace": [{"node": "plan_approval", "decision": "approve",
+                               "approved": True, "attempts": attempts}]}
+        if action == "reject":
+            return _refuse_plan("reject", "rejected by the reviewer", attempts)
+        # anything else is treated as an edit to re-validate (never trusted blindly)
+        attempts += 1
+        try:
+            edited = deserialize_plan(decision.get("plan", []))
+            verdict = validate_plan(edited)         # shape + non-empty instructions
+            reason = "" if verdict.ok else verdict.reason
+        except (TypeError, ValueError):             # a malformed edit (bad step dict shape)
+            edited, reason = None, "edit is not a well-formed plan"
+        if not reason and edited is not None:       # accepted edit: persist it, then dispatch
+            # Edit re-validation is STRUCTURAL only (validate_plan: shape + non-empty
+            # instructions). Feasibility is NOT re-run here -- it is question-driven and the
+            # question is unchanged by an edit, so re-running it would be vacuous (always
+            # feasible). A structurally-valid but semantically-off edit is not
+            # deterministically catchable at this point; it surfaces downstream
+            # (SemanticConsistency / the answer).
+            return {"plan": serialize_plan(edited), "approval_attempts": attempts,
+                    "approval_result": {"decision": "edit", "attempts": attempts},
+                    "trace": [{"node": "plan_approval", "decision": "edit",
+                               "approved": True, "attempts": attempts}]}
+        if attempts >= MAX_APPROVAL_ATTEMPTS:       # bounded: stop the human ping-pong
+            return _refuse_plan("edit", reason, attempts)
+        # else: loop -> interrupt() again, now carrying `reason`
 
 
 def _current_step(state: AgentState) -> dict:
@@ -398,14 +597,24 @@ def _sql_task(state: AgentState) -> str:
     overall question. Falls back to the question when there is no plan (direct callers).
     Keeping the question as the anchor and adding the instruction as context is the
     conservative fix; fully instruction-driven generation is a later refinement (it
-    needs real-model checking that the planner emits faithful SQL instructions)."""
+    needs real-model checking that the planner emits faithful SQL instructions).
+
+    SQL generation gets BOTH the original question and the enhanced rewrite (the metric
+    block is threaded separately) so the governed intent and the added time/entity
+    context both reach generation. When the enhancement is a no-op (empty or identical)
+    the base is the original question verbatim, so the non-enhanced baseline stays
+    byte-identical."""
+    question = state["question"]
+    enhanced = state.get("enhanced_question")
+    base = (f"{question}\n\nEnhanced for retrieval: {enhanced}"
+            if enhanced and enhanced != question else question)
     plan = state.get("plan")
     if not plan:
-        return state["question"]
+        return base
     instruction = (plan[state.get("step_index", 0)] or {}).get("instruction", "")
     if instruction.strip():
-        return f"{state['question']}\n\nFor this step: {instruction}"
-    return state["question"]
+        return f"{base}\n\nFor this step: {instruction}"
+    return base
 
 
 def _dispatch_step(state: AgentState) -> dict:
@@ -455,13 +664,7 @@ def _python_analyze(state: AgentState) -> dict:
 
 def _step_advance(state: AgentState) -> dict:
     step = _current_step(state)
-    if step["kind"] == "sql":
-        record = {"kind": "sql", "sql": state.get("sql", ""),
-                  "rows": len(state["result"].rows) if state.get("result") else 0}
-    else:
-        record = {"kind": "python", "analysis": state.get("python_analysis", {}).get("analysis")}
-    results = state.get("step_results", []) + [record]
-    return {"step_results": results, "step_index": state["step_index"] + 1,
+    return {"step_index": state["step_index"] + 1,
             "attempts": 0, "python_attempts": 0, "error": None,
             "trace": [{"node": "step_advance", "completed": step["kind"]}]}
 
@@ -470,6 +673,13 @@ def _respond(state: AgentState) -> dict:
     if state.get("error"):                              # exhausted the repair budget
         return {"answer": f"I couldn't answer that reliably: {state['error']}.",
                 "trace": [{"node": "respond", "refused": True, "error": state["error"]}]}
+    result = state.get("result")
+    if state.get("answer") and result is not None and not result.ok:
+        # An already-decided refusal (only plan_approval reject / bounded invalid edit
+        # reaches respond in this state): surface its decline sentence verbatim rather
+        # than reformatting the empty result. Every other respond path has either a
+        # successful result or `error` set, so this is byte-identical for the baseline.
+        return {"answer": state["answer"], "trace": [{"node": "respond", "refused": True}]}
     governance = check_result_governance(state["result"].columns, state["tables"])
     if not governance.ok:
         return {"answer": f"I couldn't answer that reliably: {governance.reason}.",
@@ -489,14 +699,18 @@ def _respond(state: AgentState) -> dict:
             "trace": [{"node": "respond", "python_analysis": True, "truncated": truncated}]}
 
 
+def _route_after_intent(state: AgentState) -> str:
+    return END if state.get("answer") else "clarify_check"
+
+
 def _route_after_clarify(state: AgentState) -> str:
     if state.get("answer"):
         return END
-    return END if state.get("clarification") else "retrieve_schema"
+    return END if state.get("clarification") else "query_enhance"
 
 
-def _route_after_retrieve(state: AgentState) -> str:
-    return "planner" if state.get("retrieved_tables") else END
+def _route_after_feasibility(state: AgentState) -> str:
+    return END if state.get("answer") else "planner"
 
 
 def _route_after_generate(state: AgentState) -> str:
@@ -506,10 +720,18 @@ def _route_after_generate(state: AgentState) -> str:
 
 def _route_after_plan_validate(state: AgentState) -> str:
     if not state.get("error"):
-        return "dispatch"
+        # In HITL, pause for human plan approval before executing; non-HITL skips the
+        # node entirely (routes straight to dispatch) so the baseline is byte-identical.
+        return "plan_approval" if state.get("hitl") else "dispatch"
     if state.get("plan_attempts", 0) >= MAX_PLAN_ATTEMPTS:   # bounded: give up and refuse
         return "respond"
     return "planner"                                         # replan with a fresh attempt
+
+
+def _route_after_plan_approval(state: AgentState) -> str:
+    # refuse (reject / bounded invalid edit) marks approval_result refused -> respond
+    # surfaces the decline; approve / accepted-edit proceed to execute the plan.
+    return "respond" if state.get("approval_result", {}).get("refused") else "dispatch"
 
 
 def _route_dispatch(state: AgentState) -> str:
@@ -517,8 +739,11 @@ def _route_dispatch(state: AgentState) -> str:
 
 
 def _route_after_sql_validate(state: AgentState) -> str:
+    # ok path now runs the semantic-consistency judge FIRST (before step_advance); the
+    # error branches are UNTOUCHED so a governance_block / exec error / structural repair
+    # NEVER reaches the judge -- Plan 2's governance invariant holds structurally.
     if not state.get("error"):
-        return "step_advance"
+        return "semantic_consistency"
     if state.get("repair_kind") == "governance_block":
         return "respond"
     if state.get("attempts", 0) >= MAX_ATTEMPTS:       # bounded: give up and refuse
@@ -526,10 +751,18 @@ def _route_after_sql_validate(state: AgentState) -> str:
     return "generate_sql"                              # repair: re-enter with the hint
 
 
+def _route_after_semantic_consistency(state: AgentState) -> str:
+    if not state.get("error"):                         # ok verdict -> proceed
+        return "step_advance"
+    if state.get("attempts", 0) >= MAX_ATTEMPTS:       # exhausted with a KNOWN mismatch:
+        return "respond"                               # REFUSE (must not reach Python/answer)
+    return "generate_sql"                              # repair, reusing the shared budget
+
+
 def _route_after_python_analyze(state: AgentState) -> str:
     if not state.get("error"):
         return "step_advance"
-    if state.get("python_attempts", 0) >= MAX_ATTEMPTS:   # bounded: give up and refuse
+    if state.get("python_attempts", 0) >= MAX_PYTHON_ATTEMPTS:   # bounded: give up and refuse
         return "respond"
     return "python_generate"                              # repair: re-generate with the failure
 
@@ -541,29 +774,49 @@ def _route_after_step_advance(state: AgentState) -> str:
 def _build(*, checkpointer=None):
     g = StateGraph(AgentState)
     g.add_node("preflight_context", _preflight_context)
+    g.add_node("intent_recognition", _intent_recognition)
     g.add_node("clarify_check", _clarify_check)
-    g.add_node("retrieve_schema", _retrieve_schema)
+    g.add_node("query_enhance", _query_enhance)
+    g.add_node("schema_recall", _schema_recall)
+    g.add_node("table_relation", _table_relation)
+    g.add_node("feasibility_assessment", _feasibility_assessment)
     g.add_node("planner", _planner)
     g.add_node("plan_validate", _plan_validate)
+    g.add_node("plan_approval", _plan_approval)
     g.add_node("dispatch", _dispatch_step)
     g.add_node("generate_sql", _generate_sql)
     g.add_node("execute", _execute)
     g.add_node("validate", _validate)
+    g.add_node("semantic_consistency", _semantic_consistency)
     g.add_node("python_generate", _python_generate)
     g.add_node("python_execute", _python_execute)
     g.add_node("python_analyze", _python_analyze)
     g.add_node("step_advance", _step_advance)
     g.add_node("respond", _respond)
     g.add_edge(START, "preflight_context")
-    g.add_edge("preflight_context", "clarify_check")
+    g.add_edge("preflight_context", "intent_recognition")
+    g.add_conditional_edges("intent_recognition", _route_after_intent,
+                            {"clarify_check": "clarify_check", END: END})
+    # query_enhance runs ONLY on the proceed path (a clarification/intent refusal never
+    # reaches it): rewrite the question for retrieval/generation, then recall schema.
     g.add_conditional_edges("clarify_check", _route_after_clarify,
-                            {"retrieve_schema": "retrieve_schema", END: END})
-    # retrieve_schema now routes into the planner instead of generate_sql:
-    g.add_conditional_edges("retrieve_schema", _route_after_retrieve,
+                            {"query_enhance": "query_enhance", END: END})
+    g.add_edge("query_enhance", "schema_recall")
+    # schema_recall (top-k retrieval, pure -- never refuses) -> table_relation
+    # (deterministic FK-edge join hints, zero LLM) -> feasibility_assessment (the
+    # single deterministic refusal owner, including empty recall) -> planner:
+    g.add_edge("schema_recall", "table_relation")
+    g.add_edge("table_relation", "feasibility_assessment")
+    g.add_conditional_edges("feasibility_assessment", _route_after_feasibility,
                             {"planner": "planner", END: END})
     g.add_edge("planner", "plan_validate")
+    # A valid plan routes to plan_approval in HITL (human approve/edit/reject), else
+    # straight to dispatch; an invalid plan replans (bounded) or refuses.
     g.add_conditional_edges("plan_validate", _route_after_plan_validate,
-                            {"dispatch": "dispatch", "planner": "planner", "respond": "respond"})
+                            {"dispatch": "dispatch", "plan_approval": "plan_approval",
+                             "planner": "planner", "respond": "respond"})
+    g.add_conditional_edges("plan_approval", _route_after_plan_approval,
+                            {"dispatch": "dispatch", "respond": "respond"})
     g.add_conditional_edges("dispatch", _route_dispatch,
                             {"generate_sql": "generate_sql", "python_generate": "python_generate"})
     # generate_sql keeps its decline short-circuit EXPLICITLY: on CANNOT_ANSWER it sets
@@ -571,8 +824,15 @@ def _build(*, checkpointer=None):
     g.add_conditional_edges("generate_sql", _route_after_generate,
                             {"execute": "execute", END: END})
     g.add_edge("execute", "validate")
-    # SQL step tail: validate now advances the step instead of responding
+    # SQL step tail: a validated (ok) result flows through the semantic-consistency judge
+    # before step_advance; the error branches (governance_block / exhausted / repair) route
+    # exactly as before and never reach the judge.
     g.add_conditional_edges("validate", _route_after_sql_validate,
+                            {"semantic_consistency": "semantic_consistency",
+                             "generate_sql": "generate_sql", "respond": "respond"})
+    # judge tail: ok -> advance; a confident mismatch repairs (shared budget) or, once the
+    # budget is spent, REFUSES (respond) -- a known semantic error must not reach Python.
+    g.add_conditional_edges("semantic_consistency", _route_after_semantic_consistency,
                             {"step_advance": "step_advance", "generate_sql": "generate_sql",
                              "respond": "respond"})
     g.add_edge("python_generate", "python_execute")
@@ -670,10 +930,21 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
     return thread_id, _to_answer(out, usage)
 
 
-def resume_agent_session(thread_id: str, clarification_response: str) -> AnswerResult:
-    """Resume a HITL run that paused in ``clarify_check``."""
+def resume_agent_session(thread_id: str, response) -> tuple[str, AnswerResult | dict]:
+    """Resume a paused HITL run with the human's ``response``.
+
+    ``response`` is a clarification string (for a ``clarify_check`` pause) or a
+    plan-approval dict ``{"decision": "approve"|"reject"|"edit", "plan": [...]?}`` (for a
+    ``plan_approval`` pause). Mirrors ``start_agent_session``: returns ``(thread_id,
+    value)``. If the run pauses AGAIN -- a clarification resume flowing into plan
+    approval, or an invalid plan edit re-interrupting -- ``value`` is the next interrupt
+    payload and the thread's model is KEPT alive for the continuing run. Only on
+    completion is the model dropped and ``value`` an ``AnswerResult``."""
     usage = UsageCallback()
-    final = _HITL_AGENT.invoke(Command(resume=clarification_response),
-                               config=_config(callbacks=[usage], thread_id=thread_id))
+    out = _HITL_AGENT.invoke(Command(resume=response),
+                             config=_config(callbacks=[usage], thread_id=thread_id))
+    interrupts = out.get("__interrupt__") if isinstance(out, dict) else None
+    if interrupts:
+        return thread_id, interrupts[0].value
     _HITL_MODELS.pop(thread_id, None)
-    return _to_answer(final, usage)
+    return thread_id, _to_answer(out, usage)

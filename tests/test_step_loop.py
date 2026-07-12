@@ -1,13 +1,27 @@
 from agent.graph import run_agent
 import agent.graph as graph
 from agent.db.build_demo_db import build as build_demo_db
+from conftest import PlanningFakeModel
 
 
 class _ScriptModel:
     """Returns queued responses in order; the LAST response is sticky (repeats), so a
     'bad SQL forever' test can exhaust the repair budget without counting attempts."""
-    def __init__(self, *responses): self._q = list(responses)
-    def invoke(self, _prompt):
+    def __init__(self, *responses):
+        self._q = list(responses)
+        self.saw_consistency = False
+    def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL that must NOT pop a queued response, else it would eat the next
+        # scripted SQL/python reply. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
+        # query_enhance runs first on every proceed path; a passthrough must NOT
+        # consume a queued response, else the enhance call would eat the plan.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         content = self._q.pop(0) if len(self._q) > 1 else self._q[0]
         return type("R", (), {"content": content})()
     def bind(self, **_): return self
@@ -41,7 +55,7 @@ def test_sql_plus_python_plan_runs_python_step(saas_db, monkeypatch):
 def test_invalid_plan_then_refusal(saas_db):
     # planner keeps emitting an empty/invalid plan -> bounded replans -> refuse.
     # The question must retrieve tables so the graph reaches the planner (a question
-    # that retrieves nothing would short-circuit at retrieve_schema and never plan).
+    # that retrieves nothing would short-circuit at schema_recall and never plan).
     model = _ScriptModel("no plan here", "still no plan", "and again")
     res = run_agent(saas_db, "how many accounts?", model=model)
     assert "couldn't" in res.answer.lower() or "can't" in res.answer.lower()
@@ -205,3 +219,68 @@ def test_planner_feeds_the_validation_reason_back_on_replan():
     _planner(state)
     assert "unsupported plan shape" in m.prompt
     assert m.prompt.rstrip().endswith("JSON:")
+
+
+def test_greeting_refuses_at_intent_without_touching_schema(saas_db):
+    # a greeting is refused by the deterministic intent guard before any model call
+    # or schema retrieval -- the model must never even be invoked.
+    model = PlanningFakeModel("SELECT 1")
+    res = run_agent(saas_db, "hello", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "intent_recognition" in nodes
+    assert "schema_recall" not in nodes
+    assert model.calls == 0
+    intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
+    assert intent_trace.get("refused") is True
+    assert "database's data" in res.answer
+
+
+def test_table_relation_computes_non_empty_join_paths_for_a_multi_table_question(saas_db):
+    # teeth: the split is not cosmetic -- a question whose top-k recall spans several
+    # FK-related tables (account/subscription/mrr_movement/invoice/user) must produce
+    # a table_relation trace entry with real join_paths, and the hint must land in the
+    # schema the planner/SQL steps see.
+    model = PlanningFakeModel("SELECT * FROM subscription")
+    res = run_agent(saas_db, "accounts and their subscriptions", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "table_relation" in nodes
+    relation_trace = [s for s in res.trace if s.get("node") == "table_relation"][0]
+    assert relation_trace["paths"] > 0
+    assert relation_trace["join_paths"]
+    assert all({"from", "to", "on"} <= set(p) for p in relation_trace["join_paths"])
+
+
+def test_normal_question_proceeds_past_intent(saas_db):
+    model = PlanningFakeModel("SELECT COUNT(*) FROM account")
+    res = run_agent(saas_db, "how many accounts?", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "intent_recognition" in nodes
+    assert "schema_recall" in nodes
+    assert "table_relation" in nodes
+    intent_trace = [s for s in res.trace if s.get("node") == "intent_recognition"][0]
+    assert intent_trace.get("intent_kind") == "data"
+    assert not intent_trace.get("refused")
+    # teeth: a normal question PROCEEDS through feasibility (not refused) -> planner.
+    assert "feasibility_assessment" in nodes
+    feasibility_trace = [s for s in res.trace if s.get("node") == "feasibility_assessment"][0]
+    assert feasibility_trace.get("feasible") is True
+    assert not feasibility_trace.get("refused")
+    assert res.answer
+
+
+def test_off_topic_question_refuses_at_feasibility_not_schema_recall(saas_db):
+    # teeth: the empty-recall refusal has MOVED from schema_recall (now pure
+    # retrieval, never refuses) to feasibility_assessment (the single deterministic
+    # refusal owner).
+    model = PlanningFakeModel("SELECT 1")
+    res = run_agent(saas_db, "what is the meaning of life", model=model)
+    nodes = [s.get("node") for s in res.trace if isinstance(s, dict)]
+    assert "schema_recall" in nodes
+    schema_trace = [s for s in res.trace if s.get("node") == "schema_recall"][0]
+    assert not schema_trace.get("refused")             # schema_recall itself never refuses
+    assert "feasibility_assessment" in nodes
+    feasibility_trace = [s for s in res.trace if s.get("node") == "feasibility_assessment"][0]
+    assert feasibility_trace.get("refused") is True
+    assert feasibility_trace.get("reason_code") == "no_recalled_tables"
+    assert res.sql == ""
+    assert "planner" not in nodes

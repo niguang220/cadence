@@ -26,11 +26,23 @@ class SequenceModel:
         self.prompts: list[str] = []
         self.calls = 0
         self._gen = 0
+        self.saw_consistency = False
 
     def invoke(self, prompt):
+        text = prompt if isinstance(prompt, str) else str(prompt)
+        # semantic_consistency is the LAST model call on a validated SQL step; a pure
+        # SIDE-CHANNEL (does NOT touch prompts/calls/_gen) so it can't shift the scripted
+        # sequence or the ``calls`` count. Returns a passthrough ok verdict.
+        if "semantic-consistency judge" in text:
+            self.saw_consistency = True
+            return type("R", (), {"content": '{"ok": true}'})()
         self.prompts.append(prompt)
         self.calls += 1
-        text = prompt if isinstance(prompt, str) else str(prompt)
+        # query_enhance runs before the planner on every proceed path; a passthrough
+        # (empty enhanced_question -> falls back to the original) does NOT consume a
+        # scripted SQL reply, though ``calls`` still counts it.
+        if "governed metric terms" in text:
+            return type("R", (), {"content": '{"enhanced_question": ""}'})()
         if text.rstrip().endswith("JSON:") and "Output a JSON array of steps" in text:
             return type("R", (), {"content": '[{"kind": "sql", "instruction": "answer the question"}]'})()
         reply = self._replies[min(self._gen, len(self._replies) - 1)]
@@ -89,12 +101,12 @@ def test_loop_self_corrects_on_execution_error(tmp_path):
         "SELECT COUNT(*) FROM track",        # attempt 2 (repair): works
     )
     res = answer_question(db, "how many tracks are there?", model=model)
-    assert model.calls == 3                  # planner + draft + one repair
+    assert model.calls == 4                  # enhance + planner + draft + one repair
     assert res.execution.ok and res.execution.rows == [(306,)]
     assert "306" in res.answer
     # the repair attempt's prompt carried the failing SQL + the DB error
-    # (prompts[0] is the planner, [1] the first draft, [2] the repair)
-    assert "no_such_col" in model.prompts[2]
+    # (prompts[0] is the enhance, [1] the planner, [2] the first draft, [3] the repair)
+    assert "no_such_col" in model.prompts[3]
 
 
 def test_loop_repairs_a_validate_flag_not_just_errors(tmp_path):
@@ -104,7 +116,7 @@ def test_loop_repairs_a_validate_flag_not_just_errors(tmp_path):
         "SELECT name, milliseconds FROM track ORDER BY milliseconds DESC LIMIT 5",
     )
     res = answer_question(db, "what are the 5 longest tracks, longest first?", model=model)
-    assert model.calls == 3                  # planner + draft + one repair (missing ORDER BY)
+    assert model.calls == 4                  # enhance + planner + draft + one repair (missing ORDER BY)
     assert "ORDER BY" in res.sql and res.execution.ok
 
 
@@ -112,7 +124,7 @@ def test_loop_gives_up_after_max_attempts(tmp_path):
     db = build(tmp_path / "t.db")
     model = SequenceModel("SELECT no_such_col FROM track")   # always broken
     res = answer_question(db, "how many tracks are there?", model=model)
-    assert model.calls == MAX_ATTEMPTS + 1   # bounded: planner + MAX_ATTEMPTS generations
+    assert model.calls == MAX_ATTEMPTS + 2   # bounded: enhance + planner + MAX_ATTEMPTS generations
     assert not res.execution.ok
     assert "couldn't answer" in res.answer.lower()
     generates = [t for t in res.trace if t["node"] == "generate_sql"]
