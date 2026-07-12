@@ -16,7 +16,7 @@ from agent.db.build_saas_db import build
 from agent.db.introspect import introspect
 from agent.sandbox import SandboxResult
 from evalharness.consistency_eval import ConsistencyOutcome
-from evalharness.golden import ConsistencyCase, SandboxCase
+from evalharness.golden import CONSISTENCY_PATH, SANDBOX_PATH, ConsistencyCase, SandboxCase
 from evalharness.sandbox_eval import SandboxOutcome
 
 
@@ -82,8 +82,28 @@ def test_real_api_report_is_json_serializable_with_provenance(monkeypatch):
     report = sc.real_api_report(_ProgModel())
     json.dumps(report)                                    # must be serializable (per-case outcomes included)
     assert report["measured"] is True
-    assert set(report["golden_sha256"]) == {"consistency", "sandbox"}
     assert report["consistency"]["outcomes"] and report["sandbox"]["outcomes"]
+    # the hashes must be the REAL golden SHA-256, not just present keys
+    assert report["golden_sha256"]["consistency"] == sc._sha256(CONSISTENCY_PATH)
+    assert report["golden_sha256"]["sandbox"] == sc._sha256(SANDBOX_PATH)
+
+
+def test_run_real_api_sets_top_level_provenance(monkeypatch):
+    # the run() wrapper must stamp the top-level model id and a UTC timestamp so two
+    # measured artifacts are comparable; guard them against silent regression.
+    monkeypatch.setattr("evals.run_consistency.run_consistency",
+                        lambda db, tables, cases, model: [ConsistencyOutcome("a1", True, True)])
+    monkeypatch.setattr("evals.run_sandbox.run_sandbox",
+                        lambda cases, model: [SandboxOutcome("nrr", True)])
+
+    class _NamedModel(_ProgModel):
+        model_name = "fake-model-x"
+
+    report = sc.run("real-api", model_factory=_NamedModel)
+    assert report["tier"] == "real-api"
+    assert report["model"] == "fake-model-x"
+    assert report["timestamp"].endswith("Z")             # UTC
+    assert report["real_api"]["measured"] is True
 
 
 # --- consistency driver: validate the fixture before the judge ---------------------
