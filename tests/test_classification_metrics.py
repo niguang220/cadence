@@ -15,8 +15,19 @@ def test_accuracy_counts_exact_matches():
     assert accuracy(["a", "b", "a"], ["a", "b", "b"]) == pytest.approx(2 / 3)
 
 
-def test_accuracy_empty_is_1():
-    assert accuracy([], []) == 1.0
+def test_accuracy_empty_is_0():
+    # empty -> 0.0, consistent with the module's zero-denominator convention (not 1.0)
+    assert accuracy([], []) == 0.0
+
+
+def test_metrics_reject_length_mismatch():
+    # zip() would silently truncate; a shared metrics module must fail loudly instead
+    with pytest.raises(ValueError):
+        accuracy(["a", "b"], ["a"])
+    with pytest.raises(ValueError):
+        binary_metrics(["a", "b"], ["a"], positive="a")
+    with pytest.raises(ValueError):
+        confusion(["a", "b"], ["a"], labels=["a", "b"])
 
 
 def test_binary_metrics_perfect():

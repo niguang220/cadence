@@ -3,13 +3,14 @@
 Measured match-rate (real model + real Docker) lives in evals/run_sandbox.py. Here we
 keep the pure scorer and the deterministic teeth: ``validate_wrong_program`` runs a
 stdlib-only wrong_program through the sandbox's LOCAL runner seam (host process, no
-Docker) and asserts, in order, that it exits 0, emits parseable JSON, and diverges from
+Docker) and checks, in order, that it exits 0, emits parseable JSON, and diverges from
 the gold. This proves the fixture is a *runnable-but-miscomputing* plausible-wrong
 program; it does not test container isolation.
 """
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 
 from agent.python_step import analyze_python_output
@@ -21,6 +22,7 @@ from evalharness.computation_oracle import computation_match
 class SandboxOutcome:
     case_id: str
     matched: bool
+    error: str = ""       # a MODEL failure (bad program / timeout / non-JSON); counts as unmatched
 
 
 def score_sandbox(outcomes: list[SandboxOutcome]) -> dict:
@@ -31,13 +33,19 @@ def score_sandbox(outcomes: list[SandboxOutcome]) -> dict:
 
 
 def validate_wrong_program(case, *, timeout: float = 5.0) -> None:
-    """Assert the fixture's wrong_program is runnable-but-miscomputing (no Docker)."""
+    """Check the fixture's wrong_program is runnable-but-miscomputing (no Docker).
+
+    Uses ``sys.executable`` (a bare "python" is absent on python3-only hosts) and RAISES
+    explicitly rather than ``assert`` -- a bare assert is stripped under ``python -O``,
+    which would let a broken fixture pass this teeth check silently.
+    """
     stdin_data = {"columns": case.input["columns"], "rows": case.input["rows"]}
-    proc = _subprocess_runner(["python", "-c", case.wrong_program],
+    proc = _subprocess_runner([sys.executable, "-c", case.wrong_program],
                               json.dumps(stdin_data), timeout)
-    assert proc.returncode == 0, f"{case.id}: wrong_program did not exit 0"
+    if proc.returncode != 0:
+        raise RuntimeError(f"{case.id}: wrong_program did not exit 0")
     parsed = analyze_python_output(SandboxResult(True, stdout=proc.stdout))
-    assert parsed["ok"], f"{case.id}: wrong_program did not emit parseable JSON"
-    assert not computation_match(parsed["analysis"], case.expected_output,
-                                 tolerance=case.tolerance), \
-        f"{case.id}: wrong_program matched gold -- it has no teeth"
+    if not parsed["ok"]:
+        raise RuntimeError(f"{case.id}: wrong_program did not emit parseable JSON")
+    if computation_match(parsed["analysis"], case.expected_output, tolerance=case.tolerance):
+        raise RuntimeError(f"{case.id}: wrong_program matched gold -- it has no teeth")

@@ -21,6 +21,10 @@ def route_case(case: GateCase) -> str:
     """The terminal route: out_of_scope | feasibility_refuse | proceed."""
     if classify_intent(case.question).kind == "out_of_scope":
         return "out_of_scope"
+    # tables=[]/metrics=[] are a deliberate no-op: assess_feasibility ignores them today
+    # (only recalled + paths drive it). FORWARD RISK: if feasibility is ever extended to
+    # read tables/metrics, this surface would silently diverge from production -- that
+    # change must feed real context here (and ship a test that catches the divergence).
     verdict = assess_feasibility(case.question, [], case.recalled_tables, [], case.paths)
     return "proceed" if verdict.feasible else "feasibility_refuse"
 

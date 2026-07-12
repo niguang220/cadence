@@ -10,10 +10,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def _require_same_length(y_true: list[str], y_pred: list[str]) -> None:
+    # zip() silently truncates to the shorter list, which would hide a caller bug in a
+    # shared metrics module -- fail loudly instead.
+    if len(y_true) != len(y_pred):
+        raise ValueError(f"y_true and y_pred must have the same length ({len(y_true)} != {len(y_pred)})")
+
+
 def accuracy(y_true: list[str], y_pred: list[str]) -> float:
-    """Fraction of positions where prediction equals truth. Empty -> 1.0."""
+    """Fraction of positions where prediction equals truth. Empty -> 0.0 (matches the
+    module's zero-denominator convention, not a flattering 1.0)."""
+    _require_same_length(y_true, y_pred)
     if not y_true:
-        return 1.0
+        return 0.0
     return sum(t == p for t, p in zip(y_true, y_pred)) / len(y_true)
 
 
@@ -28,6 +37,7 @@ class ClassMetrics:
 
 def binary_metrics(y_true: list[str], y_pred: list[str], *, positive: str) -> ClassMetrics:
     """Precision/recall/f1/support for the ``positive`` class. Zero denom -> 0.0."""
+    _require_same_length(y_true, y_pred)
     tp = sum(t == positive and p == positive for t, p in zip(y_true, y_pred))
     fp = sum(t != positive and p == positive for t, p in zip(y_true, y_pred))
     fn = sum(t == positive and p != positive for t, p in zip(y_true, y_pred))
@@ -40,6 +50,7 @@ def binary_metrics(y_true: list[str], y_pred: list[str], *, positive: str) -> Cl
 def confusion(y_true: list[str], y_pred: list[str],
               labels: list[str]) -> dict[tuple[str, str], int]:
     """Counts keyed by (true_label, pred_label) over the given label set."""
+    _require_same_length(y_true, y_pred)
     counts = {(t, p): 0 for t in labels for p in labels}
     for t, p in zip(y_true, y_pred):
         if (t, p) in counts:

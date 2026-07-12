@@ -20,4 +20,4 @@ def test_wrong_programs_are_runnable_but_miscompute():
     adversarial = [c for c in load_sandbox() if c.wrong_program]
     assert adversarial, "expected at least one adversarial wrong_program fixture"
     for case in adversarial:
-        validate_wrong_program(case)   # raises AssertionError if not runnable-but-wrong
+        validate_wrong_program(case)   # raises RuntimeError if not runnable-but-wrong
