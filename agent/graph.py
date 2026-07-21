@@ -473,7 +473,8 @@ def _semantic_consistency(state: AgentState, config=None) -> dict:
     model = state.get("model") or _model_for_state(state, config)
     if model is None:
         raise RuntimeError("No model available for semantic consistency")
-    v = check_semantic_consistency(state["question"], state["sql"], state["result"], model)
+    v = check_semantic_consistency(state["question"], state["sql"], state["result"],
+                                   state["tables"], model)
     if v.ok:
         return {"error": None, "trace": [{"node": "semantic_consistency", "ok": True}]}
     # An explicit not-ok verdict must ALWAYS be a non-empty repair signal: an empty

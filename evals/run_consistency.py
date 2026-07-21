@@ -26,6 +26,7 @@ def run_consistency(db_path, tables, cases, model) -> list[ConsistencyOutcome]:
             raise RuntimeError(f"{case.id}: a result is governance-blocked")
         if diverges(cand, gold) != case.expected_caught:
             raise RuntimeError(f"{case.id}: divergence != expected_caught -- fixture invariant broken")
-        verdict = check_semantic_consistency(case.question, case.candidate_sql, cand, model)
+        verdict = check_semantic_consistency(case.question, case.candidate_sql, cand,
+                                             tables, model)
         outcomes.append(ConsistencyOutcome(case.id, case.expected_caught, caught=not verdict.ok))
     return outcomes
