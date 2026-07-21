@@ -130,6 +130,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Cadence reliability scorecard")
     parser.add_argument("--tier", choices=["deterministic", "real-api", "all"], default="deterministic")
     args = parser.parse_args()
+    from dotenv import load_dotenv
+    load_dotenv()  # a local .env is convenient; the real-api tier reads DEEPSEEK_API_KEY from env
     report = run(args.tier, model_factory=_default_model_factory())
     _RESULTS_DIR.mkdir(exist_ok=True)
     out = _RESULTS_DIR / f"scorecard_{time.strftime('%Y%m%d_%H%M%S')}.json"
