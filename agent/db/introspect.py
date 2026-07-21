@@ -148,6 +148,21 @@ def render_table(table: Table) -> str:
     return "\n".join(lines)
 
 
+def render_catalog(tables: list[Table]) -> str:
+    """Render a compact, token-cheap table catalog for the semantic-consistency judge:
+    one line per table -- ``name -- description: col1, col2`` (the ``-- description`` part
+    omitted when a table has none), PII columns skipped like ``render_table``. This lists
+    the real ENTITIES available so the judge can tell an entity mismatch (a SQL that reads
+    the wrong table) from a faithful query -- which it cannot do from {question, sql,
+    result} alone."""
+    lines = []
+    for t in tables:
+        cols = ", ".join(c.name for c in t.columns if c.policy != "pii")
+        desc = f" -- {t.description}" if t.description else ""
+        lines.append(f"{t.name}{desc}: {cols}")
+    return "\n".join(lines)
+
+
 def expand_with_fk_neighbors(tables: list[Table], requested: list[str]) -> set[str]:
     """Return ``requested`` plus its one-hop FK neighbours in BOTH directions:
     parent tables a requested table references, AND child tables that reference a

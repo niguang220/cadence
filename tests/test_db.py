@@ -168,3 +168,21 @@ def test_build_is_deterministic(tmp_path):
         assert ca.execute(query).fetchone() == cb.execute(query).fetchone()
     ca.close()
     cb.close()
+
+
+def test_render_catalog_lists_tables_with_columns_and_optional_description():
+    from agent.db.introspect import Column, Table, render_catalog
+    tables = [
+        Table(name="account", description="Paying orgs.",
+              columns=[Column(name="account_id", type="INTEGER", pk=True, notnull=True),
+                       Column(name="region", type="TEXT", pk=False, notnull=False)]),
+        Table(name="user", description="",
+              columns=[Column(name="user_id", type="INTEGER", pk=True, notnull=True),
+                       Column(name="email", type="TEXT", pk=False, notnull=False, policy="pii"),
+                       Column(name="role", type="TEXT", pk=False, notnull=False)]),
+    ]
+    out = render_catalog(tables)
+    assert out == (
+        "account -- Paying orgs.: account_id, region\n"
+        "user: user_id, role"                     # no description; pii column 'email' skipped
+    )
