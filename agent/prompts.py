@@ -151,10 +151,11 @@ ENTITY (right table) does NOT excuse a wrong MEASURE (e.g. SUM when the QUESTION
 AVERAGE) or a wrong GRAIN. Confirm the aggregate function and grouping match the QUESTION
 even when the table is right.
 
-ENTITY rule: the DATABASE TABLES below are the real entities available. If the SQL reads
-from a table that does not match the entity the QUESTION names, and the catalog contains a
-table that clearly matches it better, that is an ENTITY mismatch -- even if the returned
-number looks plausible.
+ENTITY rule: the DATABASE TABLES below are the real entities available. Judge only the
+PRIMARY entity being counted or aggregated; tables used only for JOINs, filters, or
+dimensions are NOT mismatches. Report an ENTITY mismatch only when that primary object is
+the wrong table (e.g. counting user rows when the QUESTION asks how many accounts), even if
+the returned number looks plausible.
 
 DATABASE TABLES (name -- description: columns):
 {catalog}

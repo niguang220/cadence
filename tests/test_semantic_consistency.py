@@ -49,6 +49,17 @@ def test_unparseable_defaults_ok():
     assert v.ok
 
 
+def test_non_string_content_fails_open():
+    # content=None (or a list) must fail-open to ok=True, not raise AttributeError on .index.
+    class _NonString:
+        def __init__(self, content): self._c = content
+        def invoke(self, p): return type("R", (), {"content": self._c})()
+        def bind(self, **_): return self
+    for bad in (None, ["not", "a", "string"]):
+        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), [], _NonString(bad))
+        assert v.ok, f"{bad!r} content should fail open"
+
+
 def test_catalog_tables_reach_the_prompt():
     # the fix's mechanism: the schema must actually be in the prompt the judge sees.
     from agent.db.introspect import Column, Table

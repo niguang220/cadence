@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from agent.db.introspect import render_catalog
+from agent.db.introspect import Table, render_catalog
 from agent.execution import ExecutionResult
 from agent.prompts import SEMANTIC_CONSISTENCY_PROMPT
 
@@ -45,7 +45,7 @@ def _format_result(result: ExecutionResult) -> str:
 
 
 def check_semantic_consistency(question: str, sql: str, result: ExecutionResult,
-                               tables, model) -> ConsistencyVerdict:
+                               tables: list[Table], model) -> ConsistencyVerdict:
     """Judge whether ``sql``/``result`` are semantically consistent with ``question``.
 
     ``tables`` is the introspected schema (list[Table]); its compact catalog is injected so
@@ -56,6 +56,8 @@ def check_semantic_consistency(question: str, sql: str, result: ExecutionResult,
         question=question, sql=sql, result=_format_result(result),
         catalog=render_catalog(tables))
     text = getattr(model.invoke(prompt), "content", "")
+    if not isinstance(text, str):
+        return ConsistencyVerdict(ok=True)   # non-string content (None/list) -> broken judge, fail-open
     try:
         data = json.loads(text[text.index("{"):text.rindex("}") + 1])
     except (ValueError, json.JSONDecodeError):
