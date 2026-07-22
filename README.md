@@ -151,6 +151,28 @@ python -m evals.scorecard --tier all
 pytest -q
 ```
 
+## Example
+
+A real session against the built-in demo schema (`python -m agent "<question>"`):
+
+```text
+$ python -m agent "What is our total MRR from active subscriptions?"
+tables: ['subscription', 'mrr_movement', 'revenue_recognition', 'invoice', 'plan']
+SQL:    SELECT SUM(mrr) AS total_mrr
+        FROM subscription
+        WHERE (ended_on IS NULL OR ended_on >= date('now', 'start of month'))
+          AND started_on < date('now', 'start of month', '+1 month');
+answer: total_mrr: 2328.0
+
+$ python -m agent "What's the weather in Singapore today?"
+tables: []
+answer: No tables look relevant to this question.
+```
+
+The first question is understood, translated to safe read-only SQL, executed, and answered.
+The second is outside what the data can answer — so the agent refuses with a reason instead
+of inventing a number.
+
 ## Status & roadmap
 
 - **307 tests** pass. Service-free unit tests (faked LLM/Docker) run in CI; the catch-rate /
@@ -173,3 +195,7 @@ Next, in priority order:
 
 Python 3.11 · LangGraph · DeepSeek (`deepseek-chat`, factory-isolated) · sqlglot · fastembed
 (hybrid lexical + embedding retrieval) · SQLite · Docker (isolated Python sandbox) · pytest + CI.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
