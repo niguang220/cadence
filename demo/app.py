@@ -37,6 +37,44 @@ EXAMPLES = [
 
 _LLM_NODES = {"query_enhance", "planner", "generate_sql", "semantic_consistency", "python_generate"}
 
+# One readable line per trace node, so the pipeline is legible on screen instead of a raw
+# dict dump. Each node is tagged rule (deterministic) vs LLM, which makes the "deterministic
+# backbone, only a few LLM calls" point visible right in the trace.
+_TRACE_SUMMARY = {
+    "preflight_context": lambda s: f"loaded schema, {len(s.get('semantic_metrics', []))} governed metrics in scope",
+    "intent_recognition": lambda s: f"routed as {s.get('intent_kind', '?')}",
+    "clarify_check": lambda s: "ambiguous -> ask the user" if s.get("ambiguous") else "clear (not ambiguous)",
+    "query_enhance": lambda s: "rewrote the question to the governed wording" if s.get("enhanced") else "left the question as-is",
+    "schema_recall": lambda s: "retrieved " + ", ".join(s.get("tables", [])),
+    "table_relation": lambda s: f"{s.get('paths', 0)} join path(s) between the tables",
+    "feasibility_assessment": lambda s: ("feasible" if s.get("feasible") else "not feasible")
+    + (f", risks: {', '.join(s.get('risks', []))}" if s.get("risks") else ""),
+    "planner": lambda s: "plan: " + " -> ".join(s.get("steps", [])),
+    "plan_validate": lambda s: "valid" if s.get("ok") else f"invalid: {s.get('reason', '')}",
+    "dispatch": lambda s: f"step {s.get('step_index')}: {s.get('kind')}",
+    "generate_sql": lambda s: "generated the SQL (shown above)",
+    "execute": lambda s: f"executed: {s.get('rows')} row(s), governance {s.get('governance')}",
+    "validate": lambda s: f"structural check: {s.get('verdict')}",
+    "semantic_consistency": lambda s: "judge: consistent with the question" if s.get("ok") else "judge: mismatch -> repair",
+    "step_advance": lambda s: f"completed the {s.get('completed')} step",
+    "respond": lambda s: "answered",
+    "python_generate": lambda s: "generated a Python analysis step",
+    "python_execute": lambda s: "ran the Python in the Docker sandbox",
+    "python_analyze": lambda s: "parsed the sandbox output",
+    "plan_approval": lambda s: "waited for human plan approval",
+}
+
+
+def _trace_line(step: dict) -> str:
+    node = step.get("node", "?")
+    tag = "🟠 LLM " if node in _LLM_NODES else "🔵 rule"
+    try:
+        summary = _TRACE_SUMMARY.get(node, lambda _s: "")(step)
+    except Exception:  # a formatter must never break the demo -- fall back to the node name
+        summary = ""
+    label = node.replace("_", " ")
+    return f"{tag} · **{label}**" + (f" — {summary}" if summary else "")
+
 
 @st.cache_resource
 def _db() -> str:
@@ -67,9 +105,10 @@ def _render(res: AnswerResult) -> None:
     if res.execution and res.execution.ok and res.execution.rows:
         st.dataframe([dict(zip(res.execution.columns, row)) for row in res.execution.rows])
     n_llm = sum(1 for s in res.trace if isinstance(s, dict) and s.get("node") in _LLM_NODES)
-    with st.expander(f"Pipeline trace -- {len(res.trace)} steps, {n_llm} LLM calls"):
+    with st.expander(f"Pipeline trace -- {len(res.trace)} steps, {n_llm} of them LLM calls"):
         for step in res.trace:
-            st.write(step)
+            if isinstance(step, dict):
+                st.markdown(_trace_line(step))
 
 
 def _pick(example: str) -> None:
