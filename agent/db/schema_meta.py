@@ -65,4 +65,7 @@ COLUMN_POLICIES: dict[str, dict[str, str]] = {
         "first_name": "pii",
         "last_name": "pii",
     },
+    "user": {                # SaaS schema: individual login emails are PII
+        "email": "pii",
+    },
 }

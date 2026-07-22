@@ -47,11 +47,14 @@ def check_semantic_consistency(question: str, sql: str, result: ExecutionResult,
                                model) -> ConsistencyVerdict:
     """Judge whether ``sql``/``result`` are semantically consistent with ``question``.
 
-    Parses the model's JSON verdict into a ``ConsistencyVerdict``; on parse failure
-    defaults to ``ok=True`` (fail-open -- a broken judge must not block a query)."""
+    Parses the model's JSON verdict into a ``ConsistencyVerdict``; on parse failure or a
+    non-string reply defaults to ``ok=True`` (fail-open -- a broken judge must not block a
+    query)."""
     prompt = SEMANTIC_CONSISTENCY_PROMPT.format(
         question=question, sql=sql, result=_format_result(result))
     text = getattr(model.invoke(prompt), "content", "")
+    if not isinstance(text, str):
+        return ConsistencyVerdict(ok=True)   # non-string content (None/list) -> broken judge, fail-open
     try:
         data = json.loads(text[text.index("{"):text.rindex("}") + 1])
     except (ValueError, json.JSONDecodeError):

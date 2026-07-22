@@ -168,3 +168,19 @@ def test_build_is_deterministic(tmp_path):
         assert ca.execute(query).fetchone() == cb.execute(query).fetchone()
     ca.close()
     cb.close()
+
+
+def test_saas_user_email_is_pii_and_blocked_by_governance(tmp_path):
+    # user.email is PII in the SaaS metadata: it must never render into a schema prompt,
+    # and BOTH governance layers must block it -- lock the cross-module contract directly
+    # so a future policy-plumbing regression fails here, not only in generic governance tests.
+    from agent.db.build_saas_db import build as build_saas
+    from agent.db.introspect import introspect, render_schema
+    from agent.governance import check_result_governance, check_sql_governance
+    tables = introspect(build_saas(tmp_path / "s.db"))
+    user = next(t for t in tables if t.name == "user")
+    assert next(c for c in user.columns if c.name == "email").policy == "pii"
+    assert "email" not in render_schema(tables, only=["user"])
+    assert not check_sql_governance('SELECT email FROM "user"', tables).ok    # SQL layer blocks it
+    assert not check_result_governance(["email"], tables).ok                  # result layer blocks it
+    assert check_sql_governance('SELECT COUNT(*) FROM "user"', tables).ok     # COUNT(*) still allowed
