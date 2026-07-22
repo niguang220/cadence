@@ -23,7 +23,7 @@ class _Fake:
 
 def test_ok_verdict():
     m = _Fake('{"ok": true}')
-    v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), [], m)
+    v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True),m)
     assert v.ok
 
 
@@ -31,7 +31,7 @@ def test_structured_mismatch_verdict():
     m = _Fake('{"ok": false, "mismatch_kind": "measure", "expected": "average", '
               '"observed": "sum", "evidence": "SUM(...)", "repair_hint": "use AVG"}')
     v = check_semantic_consistency("avg price?", "SELECT SUM(price) FROM t",
-                                   ExecutionResult(True), [], m)
+                                   ExecutionResult(True),m)
     assert not v.ok and v.mismatch_kind == "measure" and v.repair_hint == "use AVG"
 
 
@@ -39,13 +39,13 @@ def test_non_boolean_ok_fails_open():
     # a malformed verdict ({"ok": null/0/"false"}) is a broken judge -> fail-open ok=True,
     # not an explicit mismatch (would burn the repair budget) nor a fake success.
     for bad in ('{"ok": null}', '{"ok": 0}', '{"ok": "false"}'):
-        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), [], _Fake(bad))
+        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True),_Fake(bad))
         assert v.ok, f"{bad!r} should fail open"
 
 
 def test_unparseable_defaults_ok():
     # a broken judge must not block a query -> default ok (fail open, bounded elsewhere)
-    v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), [], _Fake("junk"))
+    v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True),_Fake("junk"))
     assert v.ok
 
 
@@ -56,31 +56,8 @@ def test_non_string_content_fails_open():
         def invoke(self, p): return type("R", (), {"content": self._c})()
         def bind(self, **_): return self
     for bad in (None, ["not", "a", "string"]):
-        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True), [], _NonString(bad))
+        v = check_semantic_consistency("q", "SELECT 1", ExecutionResult(True),_NonString(bad))
         assert v.ok, f"{bad!r} content should fail open"
-
-
-def test_catalog_tables_reach_the_prompt():
-    # the fix's mechanism: the schema must actually be in the prompt the judge sees.
-    from agent.db.introspect import Column, Table
-    captured = {}
-
-    class _Capture:
-        def invoke(self, prompt):
-            captured["prompt"] = prompt
-            return type("R", (), {"content": '{"ok": true}'})()
-
-        def bind(self, **_):
-            return self
-
-    tables = [
-        Table(name="account", columns=[Column(name="account_id", type="INTEGER", pk=True, notnull=True)]),
-        Table(name="user", columns=[Column(name="user_id", type="INTEGER", pk=True, notnull=True)]),
-    ]
-    check_semantic_consistency("how many accounts?", 'SELECT COUNT(*) FROM "user"',
-                               ExecutionResult(True), tables, _Capture())
-    assert "DATABASE TABLES" in captured["prompt"]
-    assert "account" in captured["prompt"] and "user" in captured["prompt"]
 
 
 # --- a purpose-made fake that SCRIPTS the consistency verdict -------------------

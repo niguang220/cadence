@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from agent.db.introspect import Table, render_catalog
 from agent.execution import ExecutionResult
 from agent.prompts import SEMANTIC_CONSISTENCY_PROMPT
 
@@ -45,16 +44,14 @@ def _format_result(result: ExecutionResult) -> str:
 
 
 def check_semantic_consistency(question: str, sql: str, result: ExecutionResult,
-                               tables: list[Table], model) -> ConsistencyVerdict:
+                               model) -> ConsistencyVerdict:
     """Judge whether ``sql``/``result`` are semantically consistent with ``question``.
 
-    ``tables`` is the introspected schema (list[Table]); its compact catalog is injected so
-    the judge can catch entity mismatches (a SQL reading the wrong table). Parses the model's
-    JSON verdict into a ``ConsistencyVerdict``; on parse failure defaults to ``ok=True``
-    (fail-open -- a broken judge must not block a query)."""
+    Parses the model's JSON verdict into a ``ConsistencyVerdict``; on parse failure or a
+    non-string reply defaults to ``ok=True`` (fail-open -- a broken judge must not block a
+    query)."""
     prompt = SEMANTIC_CONSISTENCY_PROMPT.format(
-        question=question, sql=sql, result=_format_result(result),
-        catalog=render_catalog(tables))
+        question=question, sql=sql, result=_format_result(result))
     text = getattr(model.invoke(prompt), "content", "")
     if not isinstance(text, str):
         return ConsistencyVerdict(ok=True)   # non-string content (None/list) -> broken judge, fail-open

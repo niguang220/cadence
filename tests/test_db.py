@@ -170,29 +170,11 @@ def test_build_is_deterministic(tmp_path):
     cb.close()
 
 
-def test_render_catalog_lists_tables_with_columns_and_optional_description():
-    from agent.db.introspect import Column, Table, render_catalog
-    tables = [
-        Table(name="account", description="Paying orgs.",
-              columns=[Column(name="account_id", type="INTEGER", pk=True, notnull=True),
-                       Column(name="region", type="TEXT", pk=False, notnull=False)]),
-        Table(name="user", description="",
-              columns=[Column(name="user_id", type="INTEGER", pk=True, notnull=True),
-                       Column(name="email", type="TEXT", pk=False, notnull=False, policy="pii"),
-                       Column(name="role", type="TEXT", pk=False, notnull=False)]),
-    ]
-    out = render_catalog(tables)
-    assert out == (
-        "account -- Paying orgs.: account_id, region\n"
-        "user: user_id, role"                     # no description; pii column 'email' skipped
-    )
-
-
-def test_render_catalog_hides_pii_columns_from_real_saas_schema(tmp_path):
-    # regression: user.email is PII in the SaaS metadata, so the real catalog (full-schema,
-    # injected into the judge prompt) must not leak the email column name.
+def test_saas_user_email_is_pii_and_hidden_from_rendered_schema(tmp_path):
+    # user.email is PII in the SaaS metadata, so it must never render into a schema prompt.
     from agent.db.build_saas_db import build as build_saas
-    from agent.db.introspect import introspect, render_catalog
-    catalog = render_catalog(introspect(build_saas(tmp_path / "s.db")))
-    assert "email" not in catalog                 # PII column hidden from the judge
-    assert "user:" in catalog                     # the user table itself is still listed
+    from agent.db.introspect import introspect, render_schema
+    tables = introspect(build_saas(tmp_path / "s.db"))
+    user = next(t for t in tables if t.name == "user")
+    assert next(c for c in user.columns if c.name == "email").policy == "pii"
+    assert "email" not in render_schema(tables, only=["user"])

@@ -146,20 +146,6 @@ GRAIN (per-row vs aggregated, the time window). Judge intent only; do NOT re-che
 Be conservative: report a mismatch ONLY when you are confident the result answers a
 different question than the one asked. When unsure, treat it as consistent.
 
-Check all three axes independently and report a mismatch if ANY one is wrong: a correct
-ENTITY (right table) does NOT excuse a wrong MEASURE (e.g. SUM when the QUESTION asks the
-AVERAGE) or a wrong GRAIN. Confirm the aggregate function and grouping match the QUESTION
-even when the table is right.
-
-ENTITY rule: the DATABASE TABLES below are the real entities available. Judge only the
-PRIMARY entity being counted or aggregated; tables used only for JOINs, filters, or
-dimensions are NOT mismatches. Report an ENTITY mismatch only when that primary object is
-the wrong table (e.g. counting user rows when the QUESTION asks how many accounts), even if
-the returned number looks plausible.
-
-DATABASE TABLES (name -- description: columns):
-{catalog}
-
 QUESTION: {question}
 
 SQL:
