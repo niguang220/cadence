@@ -1,8 +1,8 @@
 """The consistency surface scorer + deterministic teeth helpers.
 
-The judge sees only {question, sql, result} -- no metric block -- so fixtures cover only
-judge-observable mismatches (measure/grain/entity/dropped_filter), never governed
-definitions. Both candidate and gold run through the PRODUCTION path
+The judge sees {question, sql, result, and a compact table catalog} -- but never the gold
+or a governed metric block -- so fixtures cover only judge-observable mismatches
+(measure/grain/entity/dropped_filter), never governed definitions. Both candidate and gold run through the PRODUCTION path
 (``run_query(db, sql, tables=tables)``: safety on, governance runs) and must be
 governance-clean, so the judge never sees a result the graph would have blocked. The
 scorer reports BOTH catch-rate (recall on adversarial) and false-positive-rate (flag

@@ -186,3 +186,13 @@ def test_render_catalog_lists_tables_with_columns_and_optional_description():
         "account -- Paying orgs.: account_id, region\n"
         "user: user_id, role"                     # no description; pii column 'email' skipped
     )
+
+
+def test_render_catalog_hides_pii_columns_from_real_saas_schema(tmp_path):
+    # regression: user.email is PII in the SaaS metadata, so the real catalog (full-schema,
+    # injected into the judge prompt) must not leak the email column name.
+    from agent.db.build_saas_db import build as build_saas
+    from agent.db.introspect import introspect, render_catalog
+    catalog = render_catalog(introspect(build_saas(tmp_path / "s.db")))
+    assert "email" not in catalog                 # PII column hidden from the judge
+    assert "user:" in catalog                     # the user table itself is still listed
