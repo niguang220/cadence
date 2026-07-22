@@ -149,6 +149,11 @@ python -m evals.scorecard --tier all
 
 # tests (service-free: LLM and Docker are faked in CI)
 pytest -q
+
+# a local, reliability-forward demo (Streamlit): shows the SQL, the pipeline trace, and
+# the semantic layer ON vs OFF -- all from real agent runs, nothing hard-coded
+pip install -e ".[demo]"
+streamlit run demo/app.py
 ```
 
 ## Example
