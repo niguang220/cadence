@@ -45,6 +45,10 @@ def test_extract_sql_strips_fences_and_surrounding_prose():
     assert _extract_sql("```sql\nSELECT 1\n```") == "SELECT 1"
     assert _extract_sql("Here is your query:\n```sql\nSELECT 1\n```\nHope it helps!") == "SELECT 1"
     assert _extract_sql("SELECT 1") == "SELECT 1"
+    # no code fence but reasoning prose before the SQL -> strip to the first statement keyword
+    assert _extract_sql("Let me check the latest dates.\nSELECT SUM(mrr) FROM subscription") == \
+        "SELECT SUM(mrr) FROM subscription"
+    assert _extract_sql("First I'll use a CTE:\nWITH m AS (SELECT 1)\nSELECT * FROM m").startswith("WITH m AS")
 
 
 def test_pipeline_runs_generated_sql_and_answers(tmp_path):
