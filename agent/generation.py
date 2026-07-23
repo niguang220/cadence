@@ -24,7 +24,14 @@ _FENCE_BLOCK = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTAL
 def _extract_sql(text: str) -> str:
     text = (text or "").strip()
     m = _FENCE_BLOCK.search(text)
-    return m.group(1).strip() if m else text
+    if m:
+        return m.group(1).strip()
+    # No code fence: the model sometimes prefixes reasoning prose ("Let me check the latest
+    # dates...\nSELECT ..."). Strip to the first SQL statement keyword so governance and
+    # execution see SQL, not prose (unstripped prose fails to parse and is misreported as a
+    # governance violation). Prefer a keyword that starts a line; else the first anywhere.
+    km = re.search(r"(?im)^\s*(?:WITH|SELECT)\b", text) or re.search(r"(?is)\b(?:WITH|SELECT)\b", text)
+    return text[km.start():].strip() if km else text
 
 
 def generate_sql(question: str, schema: str, model, *, semantic_block: str = "") -> str:
