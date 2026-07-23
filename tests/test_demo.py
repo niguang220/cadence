@@ -21,3 +21,13 @@ def test_demo_app_loads_without_agent_run():
     assert any("Cadence" in t.value for t in at.title)
     assert len(at.text_input) >= 1
     assert any(b.label == "Ask" for b in at.button)
+
+
+def test_demo_reliability_scorecard_renders():
+    # the deterministic scorecard is service-free (no API / no Docker), so clicking its
+    # button is a CI-safe check that the harness panel renders real output.
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    [b for b in at.button if b.label == "Run the reliability checks"][0].click()
+    at.run()
+    assert not at.exception
+    assert any(m.label == "Routing cases" for m in at.metric)
