@@ -37,6 +37,12 @@ EXAMPLES = [
 
 _LLM_NODES = {"query_enhance", "planner", "generate_sql", "semantic_consistency", "python_generate"}
 
+# Recorded real-API measurement of the LLM judge (docs/reliability/2026-07-22-judge-entity-
+# experiment.md). A provenance-stamped snapshot; deliberately not re-run live (real API +
+# Docker, slow), so it is shown as recorded evidence, not a live number.
+_MEASURED = {"recorded": "2026-07-22", "model": "deepseek-chat", "golden": "457abfb5",
+             "runs": 5, "catch": "8/10", "fp": "0/7"}
+
 # One readable line per trace node, so the pipeline is legible on screen instead of a raw
 # dict dump. Each node is tagged rule (deterministic) vs LLM, which makes the "deterministic
 # backbone, only a few LLM calls" point visible right in the trace.
@@ -162,8 +168,10 @@ def main() -> None:
 
     st.divider()
     st.subheader("Reliability scorecard")
-    st.caption("The deterministic tier of the self-built eval harness -- enforced in CI on "
-               "every commit, zero-API. A machine-checked spec, not a measured model accuracy.")
+    st.caption("The self-built eval harness has two tiers: a deterministic tier CI enforces on "
+               "every commit, and a measured tier run manually against the real model.")
+
+    st.markdown("**Deterministic tier** · zero-API, zero-Docker · a machine-checked spec, not a measured accuracy")
     if st.button("Run the reliability checks"):
         rep = _scorecard()
         gate, teeth = rep["gate"], rep["teeth"]
@@ -179,9 +187,18 @@ def main() -> None:
             "diverge from gold, clean controls genuinely match -- so the eval can't be fooled "
             "by a broken fixture."
         )
-        st.success("All deterministic reliability checks pass -- this is what runs in CI. "
-                   "The LLM judge's measured catch-rate lives in the manual real-API tier "
-                   "(provenance-stamped under docs/reliability/).")
+        st.success("All deterministic reliability checks pass -- this is what CI enforces.")
+
+    st.markdown("**Measured tier** · the LLM judge run against real DeepSeek (real API — recorded here, not live)")
+    m1, m2 = st.columns(2)
+    m1.metric("Catch-rate (adversarial)", _MEASURED["catch"])
+    m2.metric("False-positive-rate (clean)", _MEASURED["fp"])
+    st.caption(
+        f"Recorded {_MEASURED['recorded']}, {_MEASURED['model']}, {_MEASURED['runs']}x on the frozen "
+        f"golden set (sha256 {_MEASURED['golden']}...) -- a provenance-stamped snapshot on a small demo "
+        "set, not a stable-capability claim. The full experiment, including two candidate fixes the eval "
+        "rejected, is in docs/reliability/2026-07-22-judge-entity-experiment.md."
+    )
 
 
 if __name__ == "__main__":
