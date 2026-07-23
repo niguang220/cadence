@@ -1,5 +1,7 @@
 # Cadence
 
+[![CI](https://github.com/niguang220/cadence/actions/workflows/ci.yml/badge.svg)](https://github.com/niguang220/cadence/actions/workflows/ci.yml)
+
 > **A reliability-first natural-language-to-SQL data agent — and the evaluation harness that
 > measures it, and is willing to reject its own regressions.**
 
