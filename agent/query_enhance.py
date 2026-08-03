@@ -20,6 +20,36 @@ class EnhanceResult:
     warnings: list[str] = field(default_factory=list)
 
 
+# Deterministic backstop for the invented-time failure class: the rewrite must not add a
+# time frame the question did not contain. An invented window gets hardened by the planner
+# into date logic against a static DB, and the step never yields SQL (the MRR demo bug). The
+# prompt forbids this too; this guard catches the residual the prompt still lets through.
+# It errs toward catching: the fallback is a SAFE revert to the honest original question, so
+# a false positive only forfeits the rewrite's optimization, never a correct answer (the
+# per-gate rule -- a soft-revert fallback licenses a high-recall bias). Known limit: it
+# targets relative/explicit date markers, not every paraphrase of time; downstream validate
+# and the execution oracle catch what slips past.
+_TIME_MARKERS = re.compile(
+    r"\b(?:"
+    r"today|yesterday|tomorrow|"
+    r"(?:this|last|past|next|current|previous|trailing|recent)\s+"
+    r"(?:month|quarter|year|week|day|days|weeks|months|quarters|years)|"
+    r"year[-\s]?to[-\s]?date|ytd|mtd|qtd|"
+    r"so\s+far|as\s+of|"
+    r"since\s+\d|in\s+\d{4}|\d{4}-\d{2}-\d{2}|"
+    r"last\s+\d+\s+(?:day|week|month|quarter|year)s?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _introduced_time(original: str, rewrite: str) -> bool:
+    """True if the rewrite has a time marker the original did not (case-insensitive)."""
+    orig = {m.group(0).lower() for m in _TIME_MARKERS.finditer(original)}
+    new = {m.group(0).lower() for m in _TIME_MARKERS.finditer(rewrite)}
+    return bool(new - orig)
+
+
 def enhance_query(question: str, metrics: list[MetricDef], model) -> EnhanceResult:
     governed = [m.name for m in metrics]
     prompt = QUERY_ENHANCE_PROMPT.format(question=question,
@@ -47,6 +77,9 @@ def enhance_query(question: str, metrics: list[MetricDef], model) -> EnhanceResu
             dropped.append(met.name)
     if dropped:
         warnings.append(f"rewrite dropped governed term(s) {dropped}; kept original")
+        enhanced = question
+    if _introduced_time(question, enhanced):
+        warnings.append("rewrite introduced a time frame absent from the question; kept original")
         enhanced = question
     return EnhanceResult(enhanced, str(data.get("rewrite_diff", "")),
                          preserved_terms=governed, governed_terms=governed,

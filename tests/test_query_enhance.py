@@ -70,6 +70,29 @@ def test_short_alias_matches_on_word_boundary_not_substring():
     assert r.enhanced_question == "show element counts" and not r.warnings
 
 
+def test_enhance_falls_back_when_rewrite_invents_a_time_frame():
+    # teeth: the question states NO time frame; the rewrite invents "this month". The guard
+    # must revert to the original -- otherwise the planner hardens the invented month into
+    # date logic against a static DB and the step never produces SQL (the MRR demo failure).
+    # The governed term "MRR" survives the rewrite, so the governed-term guard does NOT fire;
+    # only the invented-time guard can cause this revert.
+    m = _Fake('{"enhanced_question": "what is our total MRR for this month?", '
+              '"rewrite_diff": "added time frame", "warnings": []}')
+    r = enhance_query("what is our total MRR?", [_metric("mrr", aliases=["MRR"])], m)
+    assert r.enhanced_question == "what is our total MRR?"   # reverted; no invented month
+    assert r.warnings
+
+
+def test_enhance_keeps_rewrite_when_the_time_frame_was_already_in_the_question():
+    # counter-teeth: when the ORIGINAL already has the time frame, keeping it in the rewrite
+    # is legitimate -- the guard must NOT revert (it checks "introduced", not "present").
+    m = _Fake('{"enhanced_question": "count active users this month at non-test accounts", '
+              '"warnings": []}')
+    r = enhance_query("count active users this month", [_metric("active users")], m)
+    assert r.enhanced_question == "count active users this month at non-test accounts"
+    assert not r.warnings
+
+
 # --- graph boundary: the original/enhanced split -------------------------------
 
 def test_enhanced_noop_keeps_sql_task_and_retrieval_byte_identical():
