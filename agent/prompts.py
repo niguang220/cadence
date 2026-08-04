@@ -97,15 +97,20 @@ Write a corrected single read-only query.
 SQL:"""
 
 
-# Pre-step rewrite that adds time/entity context so retrieval and generation are less
-# ambiguous. The HARD RULE keeps governed metric terms verbatim so their governed
-# definition still applies -- the rewrite adds context only, it must not redefine them.
-QUERY_ENHANCE_PROMPT = """Rewrite the question to be clearer for a SQL analyst: resolve \
-relative time ("this month" -> keep the phrase but make the intent explicit), expand \
-obvious abbreviations, and fold in any clarification already given. Add context only.
+# Pre-step rewrite that adds entity/abbreviation context so retrieval and generation are
+# less ambiguous. The HARD RULES keep governed metric terms verbatim AND forbid inventing a
+# time frame the question does not state -- see agent/query_enhance.py for the deterministic
+# backstop that reverts the rewrite when the model introduces one anyway.
+QUERY_ENHANCE_PROMPT = """Rewrite the question to be clearer for a SQL analyst: expand \
+obvious abbreviations, spell out an implied entity, and fold in any clarification already \
+given. Add context ONLY -- never add a constraint the question does not already contain.
 
-HARD RULE: do NOT redefine or reinterpret these governed metric terms -- keep them \
-verbatim so their governed definition still applies: {governed_terms}
+HARD RULES:
+- Do NOT introduce a time frame, date, or period the question does not already state \
+(no "this month", "year to date", "as of today", and the like). No time frame in the \
+question means no time frame in the rewrite.
+- Do NOT redefine or reinterpret these governed metric terms -- keep them verbatim so \
+their governed definition still applies: {governed_terms}
 
 Return ONLY a JSON object: {{"enhanced_question": "...", "rewrite_diff": "<what changed>", \
 "warnings": []}}

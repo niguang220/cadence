@@ -182,7 +182,7 @@ of inventing a number.
 
 ## Status & roadmap
 
-- **307 tests** pass. Service-free unit tests (faked LLM/Docker) run in CI; the catch-rate /
+- **314 tests** pass. Service-free unit tests (faked LLM/Docker) run in CI; the catch-rate /
   match-rate numbers are only produced by the manual real-API tier.
 - Real-API scorecards are honest **single-run point estimates on a small demo schema** —
   recorded with provenance, deliberately *not* dressed up as stable capabilities.

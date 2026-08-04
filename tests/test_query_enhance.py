@@ -70,6 +70,57 @@ def test_short_alias_matches_on_word_boundary_not_substring():
     assert r.enhanced_question == "show element counts" and not r.warnings
 
 
+def test_enhance_falls_back_when_rewrite_invents_a_time_frame():
+    # teeth: the question states NO time frame; the rewrite invents "this month". The guard
+    # must revert to the original -- otherwise the planner hardens the invented month into
+    # date logic against a static DB and the step never produces SQL (the MRR demo failure).
+    # The governed term "MRR" survives the rewrite, so the governed-term guard does NOT fire;
+    # only the invented-time guard can cause this revert.
+    m = _Fake('{"enhanced_question": "what is our total MRR for this month?", '
+              '"rewrite_diff": "added time frame", "warnings": []}')
+    r = enhance_query("what is our total MRR?", [_metric("mrr", aliases=["MRR"])], m)
+    assert r.enhanced_question == "what is our total MRR?"   # reverted; no invented month
+    assert r.warnings
+
+
+def test_enhance_keeps_rewrite_when_the_time_frame_was_already_in_the_question():
+    # counter-teeth: when the ORIGINAL already has the time frame, keeping it in the rewrite
+    # is legitimate -- the guard must NOT revert (it checks "introduced", not "present").
+    m = _Fake('{"enhanced_question": "count active users this month at non-test accounts", '
+              '"warnings": []}')
+    r = enhance_query("count active users this month", [_metric("active users")], m)
+    assert r.enhanced_question == "count active users this month at non-test accounts"
+    assert not r.warnings
+
+
+def test_enhance_reverts_a_since_year_time_frame():
+    # teeth: "since 2024" is an invented multi-digit year window. The governed term MRR
+    # survives the rewrite, so only the invented-time guard can cause this revert.
+    m = _Fake('{"enhanced_question": "what is our total MRR since 2024?", "warnings": []}')
+    r = enhance_query("what is our total MRR?", [_metric("mrr", aliases=["MRR"])], m)
+    assert r.enhanced_question == "what is our total MRR?"
+    assert r.warnings
+
+
+def test_enhance_reverts_a_numeric_window_not_phrased_with_last():
+    # teeth: invented windows also come as "past N days" / "trailing N months", not only
+    # "last N ...". No governed metric here, so only the invented-time guard can revert.
+    m = _Fake('{"enhanced_question": "how many signups in the past 30 days?", "warnings": []}')
+    r = enhance_query("how many signups?", [], m)
+    assert r.enhanced_question == "how many signups?"
+    assert r.warnings
+
+
+def test_enhance_records_both_the_dropped_term_and_the_invented_time():
+    # teeth: when the rewrite BOTH drops a governed term AND invents a time frame, the trace
+    # must record both -- the dropped-term revert must not hide the invented-time signal.
+    m = _Fake('{"enhanced_question": "what is revenue this month?", "warnings": []}')
+    r = enhance_query("what is MRR?", [_metric("mrr", aliases=["MRR"])], m)
+    assert r.enhanced_question == "what is MRR?"            # reverted (either guard suffices)
+    assert any("time frame" in w for w in r.warnings)      # invented-time signal present
+    assert any("dropped" in w for w in r.warnings)         # dropped-term signal present
+
+
 # --- graph boundary: the original/enhanced split -------------------------------
 
 def test_enhanced_noop_keeps_sql_task_and_retrieval_byte_identical():
