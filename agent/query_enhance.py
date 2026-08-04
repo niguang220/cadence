@@ -26,18 +26,20 @@ class EnhanceResult:
 # prompt forbids this too; this guard catches the residual the prompt still lets through.
 # It errs toward catching: the fallback is a SAFE revert to the honest original question, so
 # a false positive only forfeits the rewrite's optimization, never a correct answer (the
-# per-gate rule -- a soft-revert fallback licenses a high-recall bias). Known limit: it
-# targets relative/explicit date markers, not every paraphrase of time; downstream validate
+# per-gate rule -- a soft-revert fallback licenses a high-recall bias). Known limits: it
+# targets relative/explicit date markers (relative phrases, numeric windows, explicit years),
+# not every paraphrase of time, and NOT a new constraint that reuses a marker already in the
+# question (that belongs to the broader no-unentailed-constraint check). Downstream validate
 # and the execution oracle catch what slips past.
 _TIME_MARKERS = re.compile(
     r"\b(?:"
     r"today|yesterday|tomorrow|"
     r"(?:this|last|past|next|current|previous|trailing|recent)\s+"
     r"(?:month|quarter|year|week|day|days|weeks|months|quarters|years)|"
+    r"(?:last|past|previous|trailing|next)\s+\d+\s+(?:day|week|month|quarter|year)s?|"
     r"year[-\s]?to[-\s]?date|ytd|mtd|qtd|"
     r"so\s+far|as\s+of|"
-    r"since\s+\d|in\s+\d{4}|\d{4}-\d{2}-\d{2}|"
-    r"last\s+\d+\s+(?:day|week|month|quarter|year)s?"
+    r"since\s+\d+|during\s+\d{4}|in\s+\d{4}|q[1-4]\s+\d{4}|\d{4}-\d{2}-\d{2}"
     r")\b",
     re.IGNORECASE,
 )
@@ -75,11 +77,15 @@ def enhance_query(question: str, metrics: list[MetricDef], model) -> EnhanceResu
         if (any(_present(question, f) for f in forms)
                 and not any(_present(enhanced, f) for f in forms)):
             dropped.append(met.name)
+    # Evaluate both guards against the model's rewrite BEFORE reverting, so the trace records
+    # which failure(s) occurred even when they co-occur -- a dropped-term revert must not hide
+    # the invented-time signal. Either firing reverts to the original question.
+    invented_time = _introduced_time(question, enhanced)
     if dropped:
         warnings.append(f"rewrite dropped governed term(s) {dropped}; kept original")
-        enhanced = question
-    if _introduced_time(question, enhanced):
+    if invented_time:
         warnings.append("rewrite introduced a time frame absent from the question; kept original")
+    if dropped or invented_time:
         enhanced = question
     return EnhanceResult(enhanced, str(data.get("rewrite_diff", "")),
                          preserved_terms=governed, governed_terms=governed,
