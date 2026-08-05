@@ -76,3 +76,4 @@ class AnswerResult:
     clarification: str | None = None    # set when the agent asked to clarify instead of answering
     trace: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)   # token + latency totals for the run
+    python_analysis: dict | None = None   # a Python step's parsed output (analysis + any chart)

@@ -690,7 +690,12 @@ def _respond(state: AgentState) -> dict:
     if "python_analysis" not in state:                  # SQL-only: answer AND trace unchanged
         return {"answer": answer, "trace": [{"node": "respond"}]}
     analysis = (state.get("python_analysis") or {}).get("analysis")   # a Python step ran
-    answer = f"{answer}\nAnalysis: {analysis}"
+    # a chart (base64 PNG) belongs in the structured python_analysis for rendering, not
+    # dumped as a blob into the human answer text
+    shown = ({k: v for k, v in analysis.items() if k != "chart"}
+             if isinstance(analysis, dict) else analysis)
+    if shown:                                           # skip an empty "Analysis: {}" (chart-only)
+        answer = f"{answer}\nAnalysis: {shown}"
     truncated = state["result"].truncated
     if truncated:                                       # be honest: analysis on a sample
         answer += (f"\n(Note: this analysis is based on the first {len(state['result'].rows)} "
@@ -870,6 +875,7 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
         clarification=final.get("clarification"),
         trace=final.get("trace", []),
         usage=usage.summary(),
+        python_analysis=final.get("python_analysis"),
     )
 
 
