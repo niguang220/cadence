@@ -33,6 +33,7 @@ from agent.usage import DEEPSEEK_USD_PER_1M, estimate_cost_usd  # noqa: E402
 EXAMPLES = [
     "How many accounts are in the us-east region?",  # normal in-domain answer
     "List our users' email addresses",               # in-domain -> PII governance refusal
+    "Plot the monthly trend of MRR movement",         # needs a Python step -> Docker sandbox chart
     "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
 ]
 
@@ -131,6 +132,19 @@ def _governance_block(res) -> str | None:
     return err[len(prefix):].strip() if err.startswith(prefix) else None
 
 
+def _chart_png(res) -> bytes | None:
+    """Decode the base64 PNG a Python sandbox step may have produced, else None."""
+    analysis = (getattr(res, "python_analysis", None) or {}).get("analysis")
+    chart = analysis.get("chart") if isinstance(analysis, dict) else None
+    if not chart:
+        return None
+    try:
+        import base64
+        return base64.b64decode(chart)
+    except Exception:
+        return None
+
+
 def _render(res: AnswerResult) -> None:
     gov = _governance_block(res)
     if gov:
@@ -149,6 +163,10 @@ def _render(res: AnswerResult) -> None:
     st.code(res.sql, language="sql")
     if res.execution and res.execution.ok and res.execution.rows:
         st.dataframe([dict(zip(res.execution.columns, row)) for row in res.execution.rows])
+    png = _chart_png(res)
+    if png:
+        st.image(png, caption="Rendered by model-generated Python in the Docker sandbox — "
+                              "no network, read-only rootfs, all Linux capabilities dropped.")
     n_llm = sum(1 for s in res.trace if isinstance(s, dict) and s.get("node") in _LLM_NODES)
     with st.expander(f"Pipeline trace -- {len(res.trace)} steps, {n_llm} of them LLM calls"):
         for step in res.trace:

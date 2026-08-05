@@ -68,3 +68,18 @@ def test_governance_block_none_for_clean_or_missing_execution():
     missing = type("R", (), {"execution": None, "sql": ""})()
     assert app._governance_block(clean) is None
     assert app._governance_block(missing) is None
+
+
+def test_chart_png_decoded_from_python_analysis():
+    # a Python step's base64 PNG (from the sandbox) is decoded to bytes for st.image.
+    import base64
+    import demo.app as app
+    png = base64.b64encode(b"\x89PNG-fake-bytes").decode()
+    res = type("R", (), {"python_analysis": {"analysis": {"chart": png}}})()
+    assert app._chart_png(res) == b"\x89PNG-fake-bytes"
+
+
+def test_chart_png_none_when_absent():
+    import demo.app as app
+    assert app._chart_png(type("R", (), {"python_analysis": None})()) is None
+    assert app._chart_png(type("R", (), {"python_analysis": {"analysis": {}}})()) is None
