@@ -1,5 +1,8 @@
 """Tests for the usage callback (no real LLM; fake LLMResults stand in)."""
-from agent.usage import UsageCallback, _tokens_from_llm_result, aggregate_usage
+import pytest
+
+from agent.usage import (DEEPSEEK_USD_PER_1M, UsageCallback, _tokens_from_llm_result,
+                         aggregate_usage, estimate_cost_usd)
 
 
 class _LLMResult:
@@ -51,3 +54,15 @@ def test_callback_summary_sums_across_calls():
 def test_aggregate_empty():
     assert aggregate_usage([]) == {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
                                    "total_tokens": 0, "latency_ms": 0}
+
+
+def test_estimate_cost_usd_applies_per_million_rates():
+    # cost = input_tokens/1M * input_rate + output_tokens/1M * output_rate; guards the math
+    # (per-million scaling on both dimensions) without hard-coding a possibly-stale price.
+    usage = {"input_tokens": 2_000_000, "output_tokens": 500_000}
+    expected = 2 * DEEPSEEK_USD_PER_1M["input"] + 0.5 * DEEPSEEK_USD_PER_1M["output"]
+    assert estimate_cost_usd(usage) == pytest.approx(expected)
+
+
+def test_estimate_cost_usd_zero_when_no_tokens():
+    assert estimate_cost_usd({}) == 0.0

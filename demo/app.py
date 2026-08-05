@@ -28,6 +28,7 @@ load_dotenv()
 from agent.db.build_saas_db import build  # noqa: E402
 from agent.generation import AnswerResult  # noqa: E402
 from agent.graph import run_agent  # noqa: E402
+from agent.usage import DEEPSEEK_USD_PER_1M, estimate_cost_usd  # noqa: E402
 
 EXAMPLES = [
     "What is our total MRR?",                       # semantic layer changes this one
@@ -123,6 +124,22 @@ def _render(res: AnswerResult) -> None:
         for step in res.trace:
             if isinstance(step, dict):
                 st.markdown(_trace_line(step))
+    _render_usage(res.usage or {})
+
+
+def _render_usage(usage: dict) -> None:
+    """Cost / latency readout from the run's captured token usage (real, per run)."""
+    if not usage.get("llm_calls"):
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("LLM calls", usage.get("llm_calls", 0))
+    c2.metric("Tokens", f"{usage.get('total_tokens', 0):,}")
+    c3.metric("Latency", f"{usage.get('latency_ms', 0)} ms")
+    c4.metric("Est. cost", f"${estimate_cost_usd(usage):.4f}")
+    st.caption(
+        f"{usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out · "
+        f"cost est. @ ${DEEPSEEK_USD_PER_1M['input']}/${DEEPSEEK_USD_PER_1M['output']} "
+        "per 1M tokens (DeepSeek list price, approximate)")
 
 
 def _pick(example: str) -> None:

@@ -77,3 +77,15 @@ def aggregate_usage(events: list[dict]) -> dict:
         "total_tokens": in_t + out_t,
         "latency_ms": sum(e.get("latency_ms", 0) for e in events),
     }
+
+
+# Approximate DeepSeek deepseek-chat list price (USD per 1M tokens), for a rough cost
+# estimate in demo/eval readouts. Update as pricing changes; surfaces are expected to show
+# the rate so the figure reads as an estimate, not a billed amount.
+DEEPSEEK_USD_PER_1M = {"input": 0.27, "output": 1.10}
+
+
+def estimate_cost_usd(usage: dict, *, rates: dict = DEEPSEEK_USD_PER_1M) -> float:
+    """Rough USD cost from a usage summary's token counts, at per-1M-token rates."""
+    return (usage.get("input_tokens", 0) / 1_000_000 * rates["input"]
+            + usage.get("output_tokens", 0) / 1_000_000 * rates["output"])
