@@ -33,7 +33,7 @@ from agent.usage import estimate_cost_usd  # noqa: E402
 EXAMPLES = [
     "How many accounts are in the us-east region?",  # normal in-domain answer
     "List our users' email addresses",               # in-domain -> PII governance refusal
-    "Plot the monthly trend of MRR movement",         # needs a Python step -> Docker sandbox chart
+    "Plot a histogram of how many activity events each user has",  # only Python can bin+plot -> sandbox chart
     "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
 ]
 
