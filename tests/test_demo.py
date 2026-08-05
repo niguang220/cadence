@@ -99,17 +99,25 @@ def test_chart_png_accepts_a_real_png():
     assert out is not None and out.startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def _png_header(w, h, ihdr=b"\x00\x00\x00\x0dIHDR"):
+    return (b"\x89PNG\r\n\x1a\n" + ihdr
+            + w.to_bytes(4, "big") + h.to_bytes(4, "big") + b"\x00" * 8)
+
+
 def test_chart_png_rejects_untrusted_bytes_from_the_sandbox():
     import base64
     import demo.app as app
-    # not base64 at all
-    assert app._chart_png(_res_with_chart("!!!not base64!!!")) is None
-    # valid base64 but not a PNG (no magic) -- don't hand arbitrary bytes to the host parser
-    assert app._chart_png(_res_with_chart(base64.b64encode(b"GIF89a not a png").decode())) is None
-    # a PNG header declaring 10000x1 -- a decompression-bomb shape; reject on dimensions
-    bomb = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR"
-            + (10000).to_bytes(4, "big") + (1).to_bytes(4, "big") + b"\x00" * 8)
-    assert app._chart_png(_res_with_chart(base64.b64encode(bomb).decode())) is None
+
+    def b64(b):
+        return base64.b64encode(b).decode()
+
+    assert app._chart_png(_res_with_chart("!!!not base64!!!")) is None            # not base64
+    assert app._chart_png(_res_with_chart(b64(b"GIF89a not a png"))) is None       # no PNG magic
+    # a valid 5000x5000 declaration = 25M pixels (~100MB host RGBA) -- below Pillow's bomb
+    # threshold, so bound width*height ourselves
+    assert app._chart_png(_res_with_chart(b64(_png_header(5000, 5000)))) is None
+    # PNG magic followed by junk where the IHDR chunk should be -- must not read dimensions
+    assert app._chart_png(_res_with_chart(b64(_png_header(1, 1, ihdr=b"XXXXXXXX")))) is None
 
 
 def test_governance_block_only_for_a_pii_block_not_a_parse_failure():
@@ -120,17 +128,25 @@ def test_governance_block_only_for_a_pii_block_not_a_parse_failure():
                 "could not parse SQL for governance: boom"})()})()
     assert app._governance_block(pii) == "query references blocked PII columns: user.email"
     assert app._governance_block(parse) is None
+    # a parse error whose message happens to contain the marker text is NOT a PII block
+    marker = type("R", (), {"execution": type("E", (), {"error": "governance violation: "
+                  "could not parse SQL for governance: near \"blocked PII columns\""})()})()
+    assert app._governance_block(marker) is None
+
+
+def _run(*, sql="SELECT 1", ok=True, rows=((1,),), err="", trace=()):
+    ex = type("E", (), {"ok": ok, "error": err, "rows": list(rows)})()
+    return type("R", (), {"sql": sql, "execution": ex, "trace": list(trace)})()
 
 
 def test_ran_ok_distinguishes_a_real_answer_from_a_refusal():
     import demo.app as app
-    ok = type("R", (), {"sql": "SELECT 1",
-                        "execution": type("E", (), {"ok": True, "error": ""})()})()
-    refusal = type("R", (), {"sql": "",
-                             "execution": type("E", (), {"ok": False, "error": ""})()})()
+    assert app._ran_ok(_run()) is True
+    assert app._ran_ok(_run(sql="", ok=False, rows=())) is False          # a plain refusal
+    assert app._ran_ok(_run(ok=True, rows=())) is False                    # empty result set
+    # SQL ran OK but the run was refused downstream (e.g. semantic-consistency exhausted)
+    assert app._ran_ok(_run(trace=[{"node": "respond", "refused": True}])) is False
     pii = type("R", (), {"sql": "SELECT email FROM user", "execution": type("E", (), {
-        "ok": False, "error": "governance violation: query references blocked PII "
-        "columns: user.email"})()})()
-    assert app._ran_ok(ok) is True
-    assert app._ran_ok(refusal) is False
+        "ok": False, "rows": [], "error": "governance violation: query references blocked "
+        "PII columns: user.email"})(), "trace": []})()
     assert app._ran_ok(pii) is False

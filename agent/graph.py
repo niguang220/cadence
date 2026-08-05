@@ -81,10 +81,10 @@ MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refu
 MAX_PYTHON_ATTEMPTS = 3     # python-step retries before the graph gives up and refuses
 MAX_APPROVAL_ATTEMPTS = 2   # human plan-edit rounds before a still-invalid edit is refused
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
-# Per-run sandbox wall-clock. Generous because a fresh container rebuilds matplotlib's font
-# cache (~7s measured) on top of Docker startup and the analysis itself; too tight and a
-# chart step flakily times out (and each retry rebuilds the cache again).
-PYTHON_SANDBOX_TIMEOUT_S = 30
+# Per-run sandbox wall-clock. The image warms matplotlib's font cache at build (copied into
+# /work at start), so a chart run is ~3s (import + Docker startup), not ~10s -- keep this
+# tight so a runaway program (bounded by MAX_PYTHON_ATTEMPTS) can't hold containers long.
+PYTHON_SANDBOX_TIMEOUT_S = 12
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
 # is 1 (no tool, no repair). The two budgets are independent and both bounded.

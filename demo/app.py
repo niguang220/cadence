@@ -133,17 +133,26 @@ def _governance_block(res) -> str | None:
     """
     err = getattr(getattr(res, "execution", None), "error", "") or ""
     prefix = "governance violation:"
-    if err.startswith(prefix) and "blocked PII columns" in err:
-        return err[len(prefix):].strip()
+    if not err.startswith(prefix):
+        return None
+    reason = err[len(prefix):].strip()
+    # require the specific PII-block reason -- a parse error's message can *contain* the
+    # marker text (it echoes the SQL), so a substring match would misclassify it
+    if reason.startswith(("query references blocked PII columns:",
+                          "result contains blocked PII columns:")):
+        return reason
     return None
 
 
 # The sandbox is untrusted; its base64 PNG output is decoded and rendered on the HOST
 # (Streamlit/Pillow). Validate strictly before handing bytes to the host image parser:
-# real base64, PNG magic, and bounded dimensions (a tiny blob can declare huge pixels).
+# real base64, the PNG magic AND a proper IHDR chunk, and a total-pixel bound (a tiny
+# highly-compressed blob can declare huge dimensions -- e.g. 5000x5000 = 25M px stays under
+# Pillow's ~89M bomb threshold yet materializes ~100MB of host RGBA).
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-_MAX_CHART_B64 = 4_000_000        # ~3 MB decoded (sandbox stdout is already capped too)
-_MAX_CHART_DIM = 5000             # px per side
+_PNG_IHDR = b"\x00\x00\x00\x0dIHDR"   # a real PNG's first chunk: length 13 + type "IHDR"
+_MAX_CHART_B64 = 4_000_000           # ~3 MB decoded (sandbox stdout is capped too)
+_MAX_CHART_PIXELS = 4_000_000        # ~16 MB RGBA on the host
 
 
 def _chart_png(res) -> bytes | None:
@@ -157,20 +166,28 @@ def _chart_png(res) -> bytes | None:
         raw = base64.b64decode(chart, validate=True)
     except Exception:
         return None
-    if not raw.startswith(_PNG_MAGIC) or len(raw) < 24:
+    if not raw.startswith(_PNG_MAGIC + _PNG_IHDR) or len(raw) < 24:
         return None
-    w = int.from_bytes(raw[16:20], "big")   # PNG IHDR width/height: big-endian uint32
+    w = int.from_bytes(raw[16:20], "big")   # IHDR width/height: big-endian uint32
     h = int.from_bytes(raw[20:24], "big")
-    if not (0 < w <= _MAX_CHART_DIM and 0 < h <= _MAX_CHART_DIM):
+    if not (0 < w and 0 < h and w * h <= _MAX_CHART_PIXELS):
         return None
     return raw
 
 
 def _ran_ok(res) -> bool:
-    """True when a run produced a real answer (not a refusal / governance block)."""
+    """True when a run produced a real, non-refused, non-empty answer.
+
+    Not just execution.ok: a run can execute the SQL yet still be refused downstream (e.g.
+    semantic-consistency exhausts its repair budget), leaving a ``refused`` trace node.
+    """
+    ex = getattr(res, "execution", None)
     return (bool(getattr(res, "sql", ""))
-            and getattr(getattr(res, "execution", None), "ok", False)
-            and _governance_block(res) is None)
+            and getattr(ex, "ok", False)
+            and bool(getattr(ex, "rows", None))
+            and _governance_block(res) is None
+            and not any(isinstance(t, dict) and t.get("refused")
+                        for t in getattr(res, "trace", []) or []))
 
 
 def _render(res: AnswerResult) -> None:
