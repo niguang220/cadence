@@ -31,3 +31,22 @@ def test_demo_reliability_scorecard_renders():
     at.run()
     assert not at.exception
     assert any(m.label == "Routing cases" for m in at.metric)
+
+
+def test_demo_opens_with_the_governance_compare_hook():
+    # the page leads with the "same question, two answers, one is wrong" governance hook,
+    # not with a plain Ask box -- highest-differentiation screen first. Rendering only (the
+    # button needs the API to click), so this is service-free.
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    assert not at.exception
+    assert any(b.label == "Run both" for b in at.button)
+    assert any("Two answers" in s.value for s in at.subheader)
+
+
+def test_compare_concurrent_preserves_off_then_on_order(monkeypatch):
+    # the opener runs semantic-layer OFF and ON concurrently; the result order must stay
+    # (OFF, ON) regardless of which thread finishes first.
+    import demo.app as app
+    monkeypatch.setattr(app, "_run", lambda q, *, semantic_layer: f"sl={semantic_layer}")
+    off, on = app._compare_concurrent("Q")
+    assert off == "sl=False" and on == "sl=True"

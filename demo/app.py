@@ -36,6 +36,10 @@ EXAMPLES = [
     "What's the weather in Singapore today?",       # out of domain -> reasoned refusal
 ]
 
+# Governance hook for the opener: ungoverned SUM(mrr) = 2925 (counts trials/cancelled/test)
+# vs the governed definition = 1288. A >2x gap a non-analyst can see (verified 2026-08-05).
+OPENER_Q = "What is our total MRR?"
+
 _LLM_NODES = {"query_enhance", "planner", "generate_sql", "semantic_consistency", "python_generate"}
 
 # Recorded real-API measurement of the LLM judge (docs/reliability/2026-07-22-judge-entity-
@@ -110,6 +114,16 @@ def _run(question: str, *, semantic_layer: bool) -> AnswerResult:
     return run_agent(_db(), question, model=_model(), semantic_layer=semantic_layer)
 
 
+def _compare_concurrent(question: str):
+    """Run semantic-layer OFF and ON at the same time; return (off, on) in that order, so the
+    opener's two-way comparison costs ~one run's wall-clock, not two (verified ~2.6x)."""
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=2) as ex:
+        fo = ex.submit(_run, question, semantic_layer=False)
+        fon = ex.submit(_run, question, semantic_layer=True)
+        return fo.result(), fon.result()
+
+
 def _render(res: AnswerResult) -> None:
     if not res.sql:
         # a reasoned refusal -- the agent says why instead of inventing an answer
@@ -151,37 +165,48 @@ def main() -> None:
     st.title("Cadence")
     st.caption("A reliability-first NL->SQL data agent. Everything below is real, live agent output.")
 
-    if "question" not in st.session_state:
-        st.session_state.question = EXAMPLES[0]
-
-    st.write("Try an example:")
-    for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
-        col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
-
-    st.text_input("Ask a question about the SaaS metrics:", key="question")
-    ask, compare = st.columns(2)
-    run_single = ask.button("Ask", type="primary", use_container_width=True)
-    run_compare = compare.button("Compare: semantic layer ON vs OFF", use_container_width=True)
-
-    question = st.session_state.question
+    # --- Opener: the governance hook -- highest-differentiation screen first ---
+    st.subheader("Same question. Two answers. One is wrong.")
+    st.write(
+        f"`{OPENER_Q}` — run against the same database two ways. Both are valid SQL that "
+        "return a number. One silently breaks a business rule (it counts trials, cancelled "
+        "subscriptions, and internal-test accounts). **Can you tell which — before the reveal?**")
     try:
-        if run_single:
-            with st.spinner("Running the agent..."):
-                res = _run(question, semantic_layer=True)  # governed behaviour by default
-            _render(res)
-        if run_compare:
-            with st.spinner("Running the same question both ways..."):
-                off = _run(question, semantic_layer=False)
-                on = _run(question, semantic_layer=True)
+        if st.button("Run both", type="primary"):
+            with st.spinner("Running the same question both ways (concurrently)..."):
+                off, on = _compare_concurrent(OPENER_Q)
             left, right = st.columns(2)
             with left:
-                st.subheader("Semantic layer OFF")
+                st.subheader("Ungoverned")
                 _render(off)
+                st.caption("Raw `SUM(mrr)` with no filters — counts trials, cancelled subs, "
+                           "and demo/internal-test accounts.")
             with right:
-                st.subheader("Semantic layer ON (governed)")
+                st.subheader("Governed (semantic layer)")
                 _render(on)
+                st.caption("Applies the governed MRR definition: active paying subscriptions only.")
+            st.info("Both queries ran and returned a number. The gap between them is exactly "
+                    "the cost of an agent that isn't governed.")
     except Exception as exc:  # most likely a missing DEEPSEEK_API_KEY
         st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
+
+    st.divider()
+
+    # --- Ask your own -- the normal single-question path, demoted below the hook ---
+    st.subheader("Ask your own")
+    if "question" not in st.session_state:
+        st.session_state.question = EXAMPLES[1]
+    st.write("Or try an example:")
+    for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
+        col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
+    st.text_input("Ask a question about the SaaS metrics:", key="question")
+    if st.button("Ask", type="primary"):
+        try:
+            with st.spinner("Running the agent..."):
+                res = _run(st.session_state.question, semantic_layer=True)
+            _render(res)
+        except Exception as exc:
+            st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
 
     st.divider()
     st.subheader("Reliability scorecard")
