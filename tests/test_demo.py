@@ -50,3 +50,21 @@ def test_compare_concurrent_preserves_off_then_on_order(monkeypatch):
     monkeypatch.setattr(app, "_run", lambda q, *, semantic_layer: f"sl={semantic_layer}")
     off, on = app._compare_concurrent("Q")
     assert off == "sl=False" and on == "sl=True"
+
+
+def test_governance_block_detected_from_execution_error():
+    # a PII-blocked run carries a "governance violation: ..." execution error; the demo
+    # detects it to render a governance callout instead of a generic refusal.
+    import demo.app as app
+    ex = type("E", (), {"error": "governance violation: query references blocked PII "
+                        "columns: user.email"})()
+    res = type("R", (), {"execution": ex, "sql": "SELECT email FROM user"})()
+    assert app._governance_block(res) == "query references blocked PII columns: user.email"
+
+
+def test_governance_block_none_for_clean_or_missing_execution():
+    import demo.app as app
+    clean = type("R", (), {"execution": type("E", (), {"error": ""})(), "sql": "SELECT 1"})()
+    missing = type("R", (), {"execution": None, "sql": ""})()
+    assert app._governance_block(clean) is None
+    assert app._governance_block(missing) is None

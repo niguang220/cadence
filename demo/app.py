@@ -31,9 +31,9 @@ from agent.graph import run_agent  # noqa: E402
 from agent.usage import DEEPSEEK_USD_PER_1M, estimate_cost_usd  # noqa: E402
 
 EXAMPLES = [
-    "What is our total MRR?",                       # semantic layer changes this one
-    "How many accounts are in the us-east region?",
-    "What's the weather in Singapore today?",       # out of domain -> reasoned refusal
+    "How many accounts are in the us-east region?",  # normal in-domain answer
+    "List our users' email addresses",               # in-domain -> PII governance refusal
+    "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
 ]
 
 # Governance hook for the opener: ungoverned SUM(mrr) = 2925 (counts trials/cancelled/test)
@@ -124,7 +124,23 @@ def _compare_concurrent(question: str):
         return fo.result(), fon.result()
 
 
+def _governance_block(res) -> str | None:
+    """The PII reason if this run was blocked by column-level governance, else None."""
+    err = getattr(getattr(res, "execution", None), "error", "") or ""
+    prefix = "governance violation:"
+    return err[len(prefix):].strip() if err.startswith(prefix) else None
+
+
 def _render(res: AnswerResult) -> None:
+    gov = _governance_block(res)
+    if gov:
+        # the agent wrote a valid query; a deterministic column-level gate refused it
+        st.error(f"🔒 Blocked by data governance (PII) — {gov}")
+        st.caption("The agent wrote a valid query, but a deterministic column-level "
+                   "governance gate refused it before execution — no PII left the database.")
+        if res.sql:
+            st.code(res.sql, language="sql")
+        return
     if not res.sql:
         # a reasoned refusal -- the agent says why instead of inventing an answer
         st.warning(f"Refused: {res.answer or res.clarification or 'no answer'}")
@@ -195,7 +211,7 @@ def main() -> None:
     # --- Ask your own -- the normal single-question path, demoted below the hook ---
     st.subheader("Ask your own")
     if "question" not in st.session_state:
-        st.session_state.question = EXAMPLES[1]
+        st.session_state.question = EXAMPLES[0]
     st.write("Or try an example:")
     for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
         col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
