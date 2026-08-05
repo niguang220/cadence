@@ -28,12 +28,18 @@ load_dotenv()
 from agent.db.build_saas_db import build  # noqa: E402
 from agent.generation import AnswerResult  # noqa: E402
 from agent.graph import run_agent  # noqa: E402
+from agent.usage import DEEPSEEK_USD_PER_1M, estimate_cost_usd  # noqa: E402
 
 EXAMPLES = [
-    "What is our total MRR?",                       # semantic layer changes this one
-    "How many accounts are in the us-east region?",
-    "What's the weather in Singapore today?",       # out of domain -> reasoned refusal
+    "How many accounts are in the us-east region?",  # normal in-domain answer
+    "List our users' email addresses",               # in-domain -> PII governance refusal
+    "Plot the monthly trend of MRR movement",         # needs a Python step -> Docker sandbox chart
+    "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
 ]
+
+# Governance hook for the opener: ungoverned SUM(mrr) = 2925 (counts trials/cancelled/test)
+# vs the governed definition = 1288. A >2x gap a non-analyst can see (verified 2026-08-05).
+OPENER_Q = "What is our total MRR?"
 
 _LLM_NODES = {"query_enhance", "planner", "generate_sql", "semantic_consistency", "python_generate"}
 
@@ -109,7 +115,96 @@ def _run(question: str, *, semantic_layer: bool) -> AnswerResult:
     return run_agent(_db(), question, model=_model(), semantic_layer=semantic_layer)
 
 
+def _compare_concurrent(question: str):
+    """Run semantic-layer OFF and ON at the same time; return (off, on) in that order, so the
+    opener's two-way comparison costs ~one run's wall-clock, not two (verified ~2.6x)."""
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=2) as ex:
+        fo = ex.submit(_run, question, semantic_layer=False)
+        fon = ex.submit(_run, question, semantic_layer=True)
+        return fo.result(), fon.result()
+
+
+def _governance_block(res) -> str | None:
+    """The PII reason if this run was blocked by column-level governance, else None.
+
+    Matches the specific PII-block message, not every ``governance violation:`` error -- a
+    parse failure also uses that prefix and must not be mislabeled a PII block.
+    """
+    err = getattr(getattr(res, "execution", None), "error", "") or ""
+    prefix = "governance violation:"
+    if not err.startswith(prefix):
+        return None
+    reason = err[len(prefix):].strip()
+    # require the specific PII-block reason -- a parse error's message can *contain* the
+    # marker text (it echoes the SQL), so a substring match would misclassify it
+    if reason.startswith(("query references blocked PII columns:",
+                          "result contains blocked PII columns:")):
+        return reason
+    return None
+
+
+# The sandbox is untrusted; its base64 PNG output is decoded and rendered on the HOST
+# (Streamlit/Pillow). Validate strictly before handing bytes to the host image parser:
+# real base64, the PNG magic AND a proper IHDR chunk, and a total-pixel bound (a tiny
+# highly-compressed blob can declare huge dimensions -- e.g. 5000x5000 = 25M px stays under
+# Pillow's ~89M bomb threshold yet materializes ~100MB of host RGBA).
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_PNG_IHDR = b"\x00\x00\x00\x0dIHDR"   # a real PNG's first chunk: length 13 + type "IHDR"
+_MAX_CHART_B64 = 4_000_000           # ~3 MB decoded (sandbox stdout is capped too)
+_MAX_CHART_PIXELS = 4_000_000        # ~16 MB RGBA on the host
+
+
+def _chart_png(res) -> bytes | None:
+    """Decode + validate the base64 PNG a Python sandbox step may have produced, else None."""
+    import base64
+    analysis = (getattr(res, "python_analysis", None) or {}).get("analysis")
+    chart = analysis.get("chart") if isinstance(analysis, dict) else None
+    if not isinstance(chart, str) or not chart or len(chart) > _MAX_CHART_B64:
+        return None
+    try:
+        raw = base64.b64decode(chart, validate=True)
+    except Exception:
+        return None
+    if not raw.startswith(_PNG_MAGIC + _PNG_IHDR) or len(raw) < 24:
+        return None
+    w = int.from_bytes(raw[16:20], "big")   # IHDR width/height: big-endian uint32
+    h = int.from_bytes(raw[20:24], "big")
+    if not (0 < w and 0 < h and w * h <= _MAX_CHART_PIXELS):
+        return None
+    return raw
+
+
+def _ran_ok(res) -> bool:
+    """True when a run produced a real, non-refused, non-empty answer.
+
+    Not just execution.ok: a run can execute the SQL yet still be refused downstream (e.g.
+    semantic-consistency exhausts its repair budget), leaving a ``refused`` trace node.
+    """
+    ex = getattr(res, "execution", None)
+    return (bool(getattr(res, "sql", ""))
+            and getattr(ex, "ok", False)
+            and bool(getattr(ex, "rows", None))
+            and _governance_block(res) is None
+            and not any(isinstance(t, dict) and t.get("refused")
+                        for t in getattr(res, "trace", []) or []))
+
+
 def _render(res: AnswerResult) -> None:
+    _render_answer(res)
+    _render_usage(res.usage or {})   # always -- usage shows even on a refusal / gov block
+
+
+def _render_answer(res: AnswerResult) -> None:
+    gov = _governance_block(res)
+    if gov:
+        # the agent wrote a valid query; a deterministic column-level gate refused it
+        st.error(f"🔒 Blocked by data governance (PII) — {gov}")
+        st.caption("The agent wrote a valid query, but a deterministic column-level "
+                   "governance gate refused it before execution — no PII left the database.")
+        if res.sql:
+            st.code(res.sql, language="sql")
+        return
     if not res.sql:
         # a reasoned refusal -- the agent says why instead of inventing an answer
         st.warning(f"Refused: {res.answer or res.clarification or 'no answer'}")
@@ -118,11 +213,30 @@ def _render(res: AnswerResult) -> None:
     st.code(res.sql, language="sql")
     if res.execution and res.execution.ok and res.execution.rows:
         st.dataframe([dict(zip(res.execution.columns, row)) for row in res.execution.rows])
+    png = _chart_png(res)
+    if png:
+        st.image(png, caption="Rendered by model-generated Python in the Docker sandbox — "
+                              "no network, read-only rootfs, all Linux capabilities dropped.")
     n_llm = sum(1 for s in res.trace if isinstance(s, dict) and s.get("node") in _LLM_NODES)
     with st.expander(f"Pipeline trace -- {len(res.trace)} steps, {n_llm} of them LLM calls"):
         for step in res.trace:
             if isinstance(step, dict):
                 st.markdown(_trace_line(step))
+
+
+def _render_usage(usage: dict) -> None:
+    """Cost / latency readout from the run's captured token usage (real, per run)."""
+    if not usage.get("llm_calls"):
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("LLM calls", usage.get("llm_calls", 0))
+    c2.metric("Tokens", f"{usage.get('total_tokens', 0):,}")
+    c3.metric("Latency", f"{usage.get('latency_ms', 0)} ms")
+    c4.metric("Est. cost", f"${estimate_cost_usd(usage):.4f}")
+    st.caption(
+        f"{usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out · "
+        f"cost est. @ ${DEEPSEEK_USD_PER_1M['input']}/${DEEPSEEK_USD_PER_1M['output']} "
+        "per 1M tokens (deepseek-chat list price, approximate — verify current rates)")
 
 
 def _pick(example: str) -> None:
@@ -134,37 +248,54 @@ def main() -> None:
     st.title("Cadence")
     st.caption("A reliability-first NL->SQL data agent. Everything below is real, live agent output.")
 
-    if "question" not in st.session_state:
-        st.session_state.question = EXAMPLES[0]
-
-    st.write("Try an example:")
-    for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
-        col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
-
-    st.text_input("Ask a question about the SaaS metrics:", key="question")
-    ask, compare = st.columns(2)
-    run_single = ask.button("Ask", type="primary", use_container_width=True)
-    run_compare = compare.button("Compare: semantic layer ON vs OFF", use_container_width=True)
-
-    question = st.session_state.question
+    # --- Opener: the governance hook -- highest-differentiation screen first ---
+    st.subheader("Same question. Two answers. One is wrong.")
+    st.write(
+        f"`{OPENER_Q}` — run against the same database two ways. Both are valid SQL that "
+        "return a number. One silently breaks a business rule (it counts trials, cancelled "
+        "subscriptions, and internal-test accounts). **Can you tell which — before the reveal?**")
     try:
-        if run_single:
-            with st.spinner("Running the agent..."):
-                res = _run(question, semantic_layer=True)  # governed behaviour by default
-            _render(res)
-        if run_compare:
-            with st.spinner("Running the same question both ways..."):
-                off = _run(question, semantic_layer=False)
-                on = _run(question, semantic_layer=True)
+        if st.button("Run both", type="primary"):
+            with st.spinner("Running the same question both ways (concurrently)..."):
+                off, on = _compare_concurrent(OPENER_Q)
             left, right = st.columns(2)
             with left:
-                st.subheader("Semantic layer OFF")
+                st.subheader("Ungoverned")
                 _render(off)
+                if _ran_ok(off):
+                    st.caption("Raw `SUM(mrr)` with no filters — counts trials, cancelled subs, "
+                               "and demo/internal-test accounts.")
             with right:
-                st.subheader("Semantic layer ON (governed)")
+                st.subheader("Governed (semantic layer)")
                 _render(on)
+                if _ran_ok(on):
+                    st.caption("Applies the governed MRR definition: active paying subscriptions only.")
+            # only claim the comparison when BOTH sides actually returned a number
+            if _ran_ok(off) and _ran_ok(on):
+                st.info("Both queries ran and returned a number. The gap between them is exactly "
+                        "the cost of an agent that isn't governed.")
+            else:
+                st.warning("One side didn't return a number this run — comparison inconclusive.")
     except Exception as exc:  # most likely a missing DEEPSEEK_API_KEY
         st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
+
+    st.divider()
+
+    # --- Ask your own -- the normal single-question path, demoted below the hook ---
+    st.subheader("Ask your own")
+    if "question" not in st.session_state:
+        st.session_state.question = EXAMPLES[0]
+    st.write("Or try an example:")
+    for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
+        col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
+    st.text_input("Ask a question about the SaaS metrics:", key="question")
+    if st.button("Ask", type="primary"):
+        try:
+            with st.spinner("Running the agent..."):
+                res = _run(st.session_state.question, semantic_layer=True)
+            _render(res)
+        except Exception as exc:
+            st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
 
     st.divider()
     st.subheader("Reliability scorecard")

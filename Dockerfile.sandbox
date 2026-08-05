@@ -1,2 +1,15 @@
 FROM python:3.11-slim
-RUN pip install --no-cache-dir pandas==2.2.2
+RUN pip install --no-cache-dir pandas==2.2.2 matplotlib==3.9.2
+# Headless rendering (no display) + a writable matplotlib config/cache dir on the runtime
+# tmpfs (the rootfs is read-only; only /work is rw).
+ENV MPLBACKEND=Agg \
+    MPLCONFIGDIR=/work
+# Warm the font cache at BUILD into a readable baked dir, and copy it into the writable
+# /work tmpfs at container start (via the entrypoint) so a run READS the cache instead of
+# rebuilding it (~7s) on the fresh tmpfs -- which keeps the per-run sandbox timeout tight.
+RUN mkdir -p /opt/mplcache && MPLCONFIGDIR=/opt/mplcache python -c "import matplotlib.pyplot" \
+    && chmod -R a+rX /opt/mplcache
+RUN printf '#!/bin/sh\ncp -a /opt/mplcache/. /work/ 2>/dev/null || true\nexec "$@"\n' \
+      > /usr/local/bin/sandbox-entrypoint.sh \
+    && chmod a+rx /usr/local/bin/sandbox-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint.sh"]

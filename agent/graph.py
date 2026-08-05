@@ -81,6 +81,10 @@ MAX_PLAN_ATTEMPTS = 2       # planner retries before the graph gives up and refu
 MAX_PYTHON_ATTEMPTS = 3     # python-step retries before the graph gives up and refuses
 MAX_APPROVAL_ATTEMPTS = 2   # human plan-edit rounds before a still-invalid edit is refused
 MAX_TOOL_ROUNDS = 2         # times the model may call get_schema before it must answer
+# Per-run sandbox wall-clock. The image warms matplotlib's font cache at build (copied into
+# /work at start), so a chart run is ~3s (import + Docker startup), not ~10s -- keep this
+# tight so a runaway program (bounded by MAX_PYTHON_ATTEMPTS) can't hold containers long.
+PYTHON_SANDBOX_TIMEOUT_S = 12
 _RETRY_TEMPERATURE = 0.3    # temp 0 would regenerate the identical broken SQL
 # Worst case = MAX_ATTEMPTS * (MAX_TOOL_ROUNDS + 1) = 9 LLM calls; the typical path
 # is 1 (no tool, no repair). The two budgets are independent and both bounded.
@@ -646,7 +650,7 @@ def _python_execute(state: AgentState) -> dict:
     # computed on a partial sample.
     payload = {"columns": prior.columns, "rows": [list(r) for r in prior.rows],
                "truncated": prior.truncated}
-    sandbox = run_in_sandbox(state["python_code"], payload)
+    sandbox = run_in_sandbox(state["python_code"], payload, timeout=PYTHON_SANDBOX_TIMEOUT_S)
     return {"python_analysis": {"_sandbox_ok": sandbox.ok, "stdout": sandbox.stdout,
                                 "stderr": sandbox.stderr, "error": sandbox.error},
             "trace": [{"node": "python_execute", "ok": sandbox.ok}]}
@@ -690,7 +694,15 @@ def _respond(state: AgentState) -> dict:
     if "python_analysis" not in state:                  # SQL-only: answer AND trace unchanged
         return {"answer": answer, "trace": [{"node": "respond"}]}
     analysis = (state.get("python_analysis") or {}).get("analysis")   # a Python step ran
-    answer = f"{answer}\nAnalysis: {analysis}"
+    # a chart (base64 PNG) belongs in the structured python_analysis for rendering, not
+    # dumped as a blob into the human answer text
+    shown = ({k: v for k, v in analysis.items() if k != "chart"}
+             if isinstance(analysis, dict) else analysis)
+    if shown:                                           # skip an empty "Analysis: {}" (chart-only)
+        text = str(shown)
+        if len(text) > 800:                             # bound against a nested/hidden blob
+            text = text[:800] + " ...(truncated)"
+        answer = f"{answer}\nAnalysis: {text}"
     truncated = state["result"].truncated
     if truncated:                                       # be honest: analysis on a sample
         answer += (f"\n(Note: this analysis is based on the first {len(state['result'].rows)} "
@@ -870,6 +882,7 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
         clarification=final.get("clarification"),
         trace=final.get("trace", []),
         usage=usage.summary(),
+        python_analysis=final.get("python_analysis"),
     )
 
 
