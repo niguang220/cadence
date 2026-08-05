@@ -1,0 +1,5 @@
+# Theme for the Cadence Streamlit demo (accent colour + font). Streamlit reads this when
+# `streamlit run demo/app.py` is launched from the repo root.
+[theme]
+primaryColor = "#4F46E5"
+font = "sans serif"
