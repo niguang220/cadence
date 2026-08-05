@@ -28,12 +28,12 @@ load_dotenv()
 from agent.db.build_saas_db import build  # noqa: E402
 from agent.generation import AnswerResult  # noqa: E402
 from agent.graph import run_agent  # noqa: E402
-from agent.usage import DEEPSEEK_USD_PER_1M, estimate_cost_usd  # noqa: E402
+from agent.usage import estimate_cost_usd  # noqa: E402
 
 EXAMPLES = [
     "How many accounts are in the us-east region?",  # normal in-domain answer
     "List our users' email addresses",               # in-domain -> PII governance refusal
-    "Plot the monthly trend of MRR movement",         # needs a Python step -> Docker sandbox chart
+    "Plot a histogram of subscription monthly amounts",  # only Python can bin+plot -> sandbox chart
     "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
 ]
 
@@ -225,84 +225,78 @@ def _render_answer(res: AnswerResult) -> None:
 
 
 def _render_usage(usage: dict) -> None:
-    """Cost / latency readout from the run's captured token usage (real, per run)."""
+    """A restrained one-line cost/latency footer from the run's captured token usage."""
     if not usage.get("llm_calls"):
         return
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("LLM calls", usage.get("llm_calls", 0))
-    c2.metric("Tokens", f"{usage.get('total_tokens', 0):,}")
-    c3.metric("Latency", f"{usage.get('latency_ms', 0)} ms")
-    c4.metric("Est. cost", f"${estimate_cost_usd(usage):.4f}")
     st.caption(
-        f"{usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out · "
-        f"cost est. @ ${DEEPSEEK_USD_PER_1M['input']}/${DEEPSEEK_USD_PER_1M['output']} "
-        "per 1M tokens (deepseek-chat list price, approximate — verify current rates)")
+        f"⚙️ {usage['llm_calls']} LLM calls · {usage.get('total_tokens', 0):,} tokens · "
+        f"{usage.get('latency_ms', 0)} ms · ~${estimate_cost_usd(usage):.4f} "
+        "(deepseek-chat est., verify rates)")
 
 
 def _pick(example: str) -> None:
     st.session_state.question = example
 
 
-def main() -> None:
-    st.set_page_config(page_title="Cadence -- reliability-first NL->SQL", layout="wide")
-    st.title("Cadence")
-    st.caption("A reliability-first NL->SQL data agent. Everything below is real, live agent output.")
+_CSS = """
+<style>
+.block-container { padding-top: 2.2rem; max-width: 1080px; }
+h1 { font-weight: 800; letter-spacing: -.02em; }
+button[data-baseweb="tab"] { font-weight: 600; }
+[data-testid="stMetricValue"] { font-size: 1.5rem; }
+</style>
+"""
 
-    # --- Opener: the governance hook -- highest-differentiation screen first ---
+
+def _governance_tab() -> None:
     st.subheader("Same question. Two answers. One is wrong.")
-    st.write(
-        f"`{OPENER_Q}` — run against the same database two ways. Both are valid SQL that "
-        "return a number. One silently breaks a business rule (it counts trials, cancelled "
-        "subscriptions, and internal-test accounts). **Can you tell which — before the reveal?**")
+    st.write(f"`{OPENER_Q}` run against the same database two ways. Both are valid SQL that "
+             "return a number — one silently counts trials, cancelled subscriptions, and "
+             "internal-test accounts. **Spot the wrong one before the reveal.**")
     try:
         if st.button("Run both", type="primary"):
-            with st.spinner("Running the same question both ways (concurrently)..."):
+            with st.spinner("Running both ways (concurrently)…"):
                 off, on = _compare_concurrent(OPENER_Q)
             left, right = st.columns(2)
             with left:
-                st.subheader("Ungoverned")
+                st.markdown("##### Ungoverned")
                 _render(off)
                 if _ran_ok(off):
-                    st.caption("Raw `SUM(mrr)` with no filters — counts trials, cancelled subs, "
-                               "and demo/internal-test accounts.")
+                    st.caption("Raw `SUM(mrr)`, no filters — counts trials, cancelled subs, test accounts.")
             with right:
-                st.subheader("Governed (semantic layer)")
+                st.markdown("##### Governed (semantic layer)")
                 _render(on)
                 if _ran_ok(on):
-                    st.caption("Applies the governed MRR definition: active paying subscriptions only.")
-            # only claim the comparison when BOTH sides actually returned a number
+                    st.caption("The governed MRR definition: active paying subscriptions only.")
             if _ran_ok(off) and _ran_ok(on):
-                st.info("Both queries ran and returned a number. The gap between them is exactly "
-                        "the cost of an agent that isn't governed.")
+                st.info("Both ran and returned a number. The gap is the cost of an ungoverned agent.")
             else:
                 st.warning("One side didn't return a number this run — comparison inconclusive.")
     except Exception as exc:  # most likely a missing DEEPSEEK_API_KEY
-        st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
+        st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. a local .env).")
 
-    st.divider()
 
-    # --- Ask your own -- the normal single-question path, demoted below the hook ---
-    st.subheader("Ask your own")
+def _ask_tab() -> None:
     if "question" not in st.session_state:
         st.session_state.question = EXAMPLES[0]
-    st.write("Or try an example:")
+    st.write("Ask anything about the SaaS metrics — or try an example:")
     for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
         col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
-    st.text_input("Ask a question about the SaaS metrics:", key="question")
+    st.text_input("Question", key="question", label_visibility="collapsed",
+                  placeholder="Ask a question about the SaaS metrics…")
     if st.button("Ask", type="primary"):
         try:
-            with st.spinner("Running the agent..."):
+            with st.spinner("Running the agent…"):
                 res = _run(st.session_state.question, semantic_layer=True)
             _render(res)
         except Exception as exc:
-            st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
+            st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. a local .env).")
 
-    st.divider()
-    st.subheader("Reliability scorecard")
-    st.caption("The self-built eval harness has two tiers: a deterministic tier CI enforces on "
-               "every commit, and a measured tier run manually against the real model.")
 
-    st.markdown("**Deterministic tier** · zero-API, zero-Docker · a machine-checked spec, not a measured accuracy")
+def _reliability_tab() -> None:
+    st.caption("A self-built eval harness, two tiers: a deterministic tier CI enforces on every "
+               "commit, and a measured tier run manually against the real model.")
+    st.markdown("**Deterministic tier** · zero-API, zero-Docker · a machine-checked spec")
     if st.button("Run the reliability checks"):
         rep = _scorecard()
         gate, teeth = rep["gate"], rep["teeth"]
@@ -314,22 +308,34 @@ def main() -> None:
             f"Refuse-gate precision/recall {gate['feasibility']['precision']:.0%}/"
             f"{gate['feasibility']['recall']:.0%} on adversarial boundary cases · "
             f"{teeth['consistency_passed']} consistency + {teeth['sandbox_passed']} sandbox "
-            "fixtures, each verified to behave as labeled -- adversarial cases genuinely "
-            "diverge from gold, clean controls genuinely match -- so the eval can't be fooled "
-            "by a broken fixture."
-        )
-        st.success("All deterministic reliability checks pass -- this is what CI enforces.")
-
-    st.markdown("**Measured tier** · the LLM judge run against real DeepSeek (real API — recorded here, not live)")
+            "fixtures, each verified to behave as labeled — so the eval can't be fooled by a "
+            "broken fixture.")
+        st.success("All deterministic reliability checks pass — this is what CI enforces.")
+    st.divider()
+    st.markdown("**Measured tier** · the LLM judge vs real DeepSeek (recorded, not live)")
     m1, m2 = st.columns(2)
     m1.metric("Catch-rate (adversarial)", _MEASURED["catch"])
     m2.metric("False-positive-rate (clean)", _MEASURED["fp"])
     st.caption(
-        f"Recorded {_MEASURED['recorded']}, {_MEASURED['model']}, {_MEASURED['runs']}x on the frozen "
-        f"golden set (sha256 {_MEASURED['golden']}...) -- a provenance-stamped snapshot on a small demo "
-        "set, not a stable-capability claim. The full experiment, including two candidate fixes the eval "
-        "rejected, is in docs/reliability/2026-07-22-judge-entity-experiment.md."
-    )
+        f"Recorded {_MEASURED['recorded']}, {_MEASURED['model']}, {_MEASURED['runs']}× on the frozen "
+        f"golden set (sha256 {_MEASURED['golden']}…) — a provenance-stamped snapshot, not a "
+        "stable-capability claim. Full experiment (incl. two rejected fixes): "
+        "docs/reliability/2026-07-22-judge-entity-experiment.md.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="Cadence — reliability-first NL→SQL", page_icon="🛡️",
+                       layout="wide")
+    st.markdown(_CSS, unsafe_allow_html=True)
+    st.title("Cadence")
+    st.caption("A reliability-first NL→SQL data agent — real, live agent output, not a mockup.")
+    gov, ask, rel = st.tabs(["⚖️  Governance demo", "💬  Ask anything", "📊  Reliability scorecard"])
+    with gov:
+        _governance_tab()
+    with ask:
+        _ask_tab()
+    with rel:
+        _reliability_tab()
 
 
 if __name__ == "__main__":
