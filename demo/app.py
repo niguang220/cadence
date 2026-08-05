@@ -126,26 +126,59 @@ def _compare_concurrent(question: str):
 
 
 def _governance_block(res) -> str | None:
-    """The PII reason if this run was blocked by column-level governance, else None."""
+    """The PII reason if this run was blocked by column-level governance, else None.
+
+    Matches the specific PII-block message, not every ``governance violation:`` error -- a
+    parse failure also uses that prefix and must not be mislabeled a PII block.
+    """
     err = getattr(getattr(res, "execution", None), "error", "") or ""
     prefix = "governance violation:"
-    return err[len(prefix):].strip() if err.startswith(prefix) else None
+    if err.startswith(prefix) and "blocked PII columns" in err:
+        return err[len(prefix):].strip()
+    return None
+
+
+# The sandbox is untrusted; its base64 PNG output is decoded and rendered on the HOST
+# (Streamlit/Pillow). Validate strictly before handing bytes to the host image parser:
+# real base64, PNG magic, and bounded dimensions (a tiny blob can declare huge pixels).
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_MAX_CHART_B64 = 4_000_000        # ~3 MB decoded (sandbox stdout is already capped too)
+_MAX_CHART_DIM = 5000             # px per side
 
 
 def _chart_png(res) -> bytes | None:
-    """Decode the base64 PNG a Python sandbox step may have produced, else None."""
+    """Decode + validate the base64 PNG a Python sandbox step may have produced, else None."""
+    import base64
     analysis = (getattr(res, "python_analysis", None) or {}).get("analysis")
     chart = analysis.get("chart") if isinstance(analysis, dict) else None
-    if not chart:
+    if not isinstance(chart, str) or not chart or len(chart) > _MAX_CHART_B64:
         return None
     try:
-        import base64
-        return base64.b64decode(chart)
+        raw = base64.b64decode(chart, validate=True)
     except Exception:
         return None
+    if not raw.startswith(_PNG_MAGIC) or len(raw) < 24:
+        return None
+    w = int.from_bytes(raw[16:20], "big")   # PNG IHDR width/height: big-endian uint32
+    h = int.from_bytes(raw[20:24], "big")
+    if not (0 < w <= _MAX_CHART_DIM and 0 < h <= _MAX_CHART_DIM):
+        return None
+    return raw
+
+
+def _ran_ok(res) -> bool:
+    """True when a run produced a real answer (not a refusal / governance block)."""
+    return (bool(getattr(res, "sql", ""))
+            and getattr(getattr(res, "execution", None), "ok", False)
+            and _governance_block(res) is None)
 
 
 def _render(res: AnswerResult) -> None:
+    _render_answer(res)
+    _render_usage(res.usage or {})   # always -- usage shows even on a refusal / gov block
+
+
+def _render_answer(res: AnswerResult) -> None:
     gov = _governance_block(res)
     if gov:
         # the agent wrote a valid query; a deterministic column-level gate refused it
@@ -172,7 +205,6 @@ def _render(res: AnswerResult) -> None:
         for step in res.trace:
             if isinstance(step, dict):
                 st.markdown(_trace_line(step))
-    _render_usage(res.usage or {})
 
 
 def _render_usage(usage: dict) -> None:
@@ -187,7 +219,7 @@ def _render_usage(usage: dict) -> None:
     st.caption(
         f"{usage.get('input_tokens', 0):,} in / {usage.get('output_tokens', 0):,} out · "
         f"cost est. @ ${DEEPSEEK_USD_PER_1M['input']}/${DEEPSEEK_USD_PER_1M['output']} "
-        "per 1M tokens (DeepSeek list price, approximate)")
+        "per 1M tokens (deepseek-chat list price, approximate — verify current rates)")
 
 
 def _pick(example: str) -> None:
@@ -213,14 +245,20 @@ def main() -> None:
             with left:
                 st.subheader("Ungoverned")
                 _render(off)
-                st.caption("Raw `SUM(mrr)` with no filters — counts trials, cancelled subs, "
-                           "and demo/internal-test accounts.")
+                if _ran_ok(off):
+                    st.caption("Raw `SUM(mrr)` with no filters — counts trials, cancelled subs, "
+                               "and demo/internal-test accounts.")
             with right:
                 st.subheader("Governed (semantic layer)")
                 _render(on)
-                st.caption("Applies the governed MRR definition: active paying subscriptions only.")
-            st.info("Both queries ran and returned a number. The gap between them is exactly "
-                    "the cost of an agent that isn't governed.")
+                if _ran_ok(on):
+                    st.caption("Applies the governed MRR definition: active paying subscriptions only.")
+            # only claim the comparison when BOTH sides actually returned a number
+            if _ran_ok(off) and _ran_ok(on):
+                st.info("Both queries ran and returned a number. The gap between them is exactly "
+                        "the cost of an agent that isn't governed.")
+            else:
+                st.warning("One side didn't return a number this run — comparison inconclusive.")
     except Exception as exc:  # most likely a missing DEEPSEEK_API_KEY
         st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. in a local .env).")
 

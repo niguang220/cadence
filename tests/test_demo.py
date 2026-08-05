@@ -74,12 +74,63 @@ def test_chart_png_decoded_from_python_analysis():
     # a Python step's base64 PNG (from the sandbox) is decoded to bytes for st.image.
     import base64
     import demo.app as app
-    png = base64.b64encode(b"\x89PNG-fake-bytes").decode()
-    res = type("R", (), {"python_analysis": {"analysis": {"chart": png}}})()
-    assert app._chart_png(res) == b"\x89PNG-fake-bytes"
+    res = type("R", (), {"python_analysis": {"analysis": {"chart": _REAL_1PX_PNG}}})()
+    assert app._chart_png(res) == base64.b64decode(_REAL_1PX_PNG)
 
 
 def test_chart_png_none_when_absent():
     import demo.app as app
     assert app._chart_png(type("R", (), {"python_analysis": None})()) is None
     assert app._chart_png(type("R", (), {"python_analysis": {"analysis": {}}})()) is None
+
+
+_REAL_1PX_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
+                 "C0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+
+
+def _res_with_chart(b64):
+    import demo.app as app  # noqa: F401
+    return type("R", (), {"python_analysis": {"analysis": {"chart": b64}}})()
+
+
+def test_chart_png_accepts_a_real_png():
+    import demo.app as app
+    out = app._chart_png(_res_with_chart(_REAL_1PX_PNG))
+    assert out is not None and out.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_chart_png_rejects_untrusted_bytes_from_the_sandbox():
+    import base64
+    import demo.app as app
+    # not base64 at all
+    assert app._chart_png(_res_with_chart("!!!not base64!!!")) is None
+    # valid base64 but not a PNG (no magic) -- don't hand arbitrary bytes to the host parser
+    assert app._chart_png(_res_with_chart(base64.b64encode(b"GIF89a not a png").decode())) is None
+    # a PNG header declaring 10000x1 -- a decompression-bomb shape; reject on dimensions
+    bomb = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR"
+            + (10000).to_bytes(4, "big") + (1).to_bytes(4, "big") + b"\x00" * 8)
+    assert app._chart_png(_res_with_chart(base64.b64encode(bomb).decode())) is None
+
+
+def test_governance_block_only_for_a_pii_block_not_a_parse_failure():
+    import demo.app as app
+    pii = type("R", (), {"execution": type("E", (), {"error": "governance violation: "
+              "query references blocked PII columns: user.email"})()})()
+    parse = type("R", (), {"execution": type("E", (), {"error": "governance violation: "
+                "could not parse SQL for governance: boom"})()})()
+    assert app._governance_block(pii) == "query references blocked PII columns: user.email"
+    assert app._governance_block(parse) is None
+
+
+def test_ran_ok_distinguishes_a_real_answer_from_a_refusal():
+    import demo.app as app
+    ok = type("R", (), {"sql": "SELECT 1",
+                        "execution": type("E", (), {"ok": True, "error": ""})()})()
+    refusal = type("R", (), {"sql": "",
+                             "execution": type("E", (), {"ok": False, "error": ""})()})()
+    pii = type("R", (), {"sql": "SELECT email FROM user", "execution": type("E", (), {
+        "ok": False, "error": "governance violation: query references blocked PII "
+        "columns: user.email"})()})()
+    assert app._ran_ok(ok) is True
+    assert app._ran_ok(refusal) is False
+    assert app._ran_ok(pii) is False

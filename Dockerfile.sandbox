@@ -3,6 +3,7 @@ RUN pip install --no-cache-dir pandas==2.2.2 matplotlib==3.9.2
 # Headless rendering (no display) + a writable matplotlib config/cache dir. The sandbox
 # runs with a read-only rootfs and only /work is a writable tmpfs, so point MPLCONFIGDIR
 # there; MPLBACKEND=Agg lets model-generated code save a PNG to a base64 buffer without a
-# display. (The font cache rebuilds per run on the fresh tmpfs -- a sub-second cost.)
+# display. The font cache rebuilds per run on the fresh tmpfs (~7s measured); the
+# per-run sandbox timeout (PYTHON_SANDBOX_TIMEOUT_S) is sized to absorb that.
 ENV MPLBACKEND=Agg \
     MPLCONFIGDIR=/work

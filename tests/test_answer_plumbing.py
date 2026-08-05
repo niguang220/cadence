@@ -36,3 +36,15 @@ def test_respond_omits_empty_analysis_line_for_a_chart_only_step():
              "python_analysis": {"analysis": {"chart": "BLOB"}}}
     out = _respond(state)
     assert "Analysis:" not in out["answer"] and "BLOB" not in out["answer"]
+
+
+def test_respond_bounds_analysis_text_against_a_nested_blob():
+    # the top-level chart strip is shallow; a blob hidden under another key must still not
+    # be dumped unbounded into the answer text.
+    from agent.graph import _respond
+    from agent.execution import ExecutionResult
+    blob = "B" * 5000
+    state = {"result": ExecutionResult(True, ["m"], [(1,)]), "tables": [],
+             "python_analysis": {"analysis": {"payload": {"chart": blob}}}}
+    out = _respond(state)
+    assert blob not in out["answer"]
