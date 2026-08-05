@@ -1,2 +1,8 @@
 FROM python:3.11-slim
-RUN pip install --no-cache-dir pandas==2.2.2
+RUN pip install --no-cache-dir pandas==2.2.2 matplotlib==3.9.2
+# Headless rendering (no display) + a writable matplotlib config/cache dir. The sandbox
+# runs with a read-only rootfs and only /work is a writable tmpfs, so point MPLCONFIGDIR
+# there; MPLBACKEND=Agg lets model-generated code save a PNG to a base64 buffer without a
+# display. (The font cache rebuilds per run on the fresh tmpfs -- a sub-second cost.)
+ENV MPLBACKEND=Agg \
+    MPLCONFIGDIR=/work

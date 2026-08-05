@@ -24,7 +24,9 @@ _ISOLATION_FLAGS = [
     "--cpus=1",                          # cpu cap
     "--pids-limit=64",                   # process cap: no fork bomb
     "--read-only",                       # read-only root filesystem
-    "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=64m",  # hardened scratch dir
+    # hardened scratch dir; mode=1777 (world-writable sticky, like /tmp) so the
+    # unprivileged user can write scratch files (e.g. matplotlib's font cache)
+    "--tmpfs", "/work:rw,noexec,nosuid,nodev,size=64m,mode=1777",
     "--workdir", "/work",                # run in the writable scratch dir
     "--cap-drop=ALL",                    # drop every Linux capability
     "--security-opt=no-new-privileges",  # block privilege escalation

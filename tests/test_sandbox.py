@@ -15,6 +15,9 @@ def test_command_pins_the_full_isolation_contract():
         assert flag in cmd, f"missing isolation flag: {flag}"
     # tmpfs is hardened (noexec/nosuid/nodev/size) and the user is unprivileged
     assert "--tmpfs" in cmd and any("noexec" in a and "nosuid" in a for a in cmd)
+    # ...and world-writable (mode=1777) so the unprivileged user can write scratch
+    # files (e.g. matplotlib's font cache) despite the read-only rootfs
+    assert any("mode=1777" in a for a in cmd)
     assert "65534:65534" in cmd
     # no host directory is ever mounted into the sandbox
     assert "-v" not in cmd and "--volume" not in cmd
