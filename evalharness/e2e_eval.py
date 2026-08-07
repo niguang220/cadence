@@ -10,6 +10,7 @@ of records into the roadmap's Step-1 report shape.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from agent.execution import run_query
@@ -92,3 +93,47 @@ def run_case(db_path, tables, case, model, *, semantic_layer: bool,
                        semantic_layer=semantic_layer)
     return record_run(case, result, gold.rows, semantic_layer=semantic_layer,
                       retrieval_config=retrieval_config)
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Nearest-rank percentile (small-n friendly); 0.0 for an empty list."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, math.ceil(pct / 100 * len(ordered)))
+    return ordered[rank - 1]
+
+
+def _rate(flags: list[bool]) -> dict:
+    return {"exec_match_rate": (sum(flags) / len(flags)) if flags else 0.0,
+            "matched": sum(flags), "n": len(flags)}
+
+
+def summarize(records: list[EvalRecord]) -> dict:
+    traps = [r for r in records if r.category != "control"]
+    controls = [r for r in records if r.category == "control"]
+
+    def split(rows):
+        return {"on": _rate([r.exec_match for r in rows if r.semantic_layer]),
+                "off": _rate([r.exec_match for r in rows if not r.semantic_layer])}
+
+    # A control "diverges" if any (id) run disagrees on exec_match between ON and OFF --
+    # the semantic layer changed an answer it should have left alone.
+    diverging = sorted({
+        r.id for r in controls
+        if any(o.id == r.id and o.semantic_layer != r.semantic_layer
+               and o.exec_match != r.exec_match for o in controls)
+    })
+
+    lat = [r.latency_ms for r in records]
+    return {
+        "n_records": len(records),
+        "traps": split(traps),
+        "controls": {**split(controls), "diverging_ids": diverging},
+        "sql_valid_first_try_rate": (sum(r.sql_valid_first_try for r in records) / len(records)) if records else 0.0,
+        "sql_valid_after_repair_rate": (sum(r.sql_valid_final for r in records) / len(records)) if records else 0.0,
+        "avg_repair_attempts": (sum(r.repair_attempts for r in records) / len(records)) if records else 0.0,
+        "latency_ms": {"p50": _percentile(lat, 50), "p95": _percentile(lat, 95)},
+        "avg_prompt_tokens": (sum(r.prompt_tokens for r in records) / len(records)) if records else 0.0,
+        "avg_completion_tokens": (sum(r.completion_tokens for r in records) / len(records)) if records else 0.0,
+    }
