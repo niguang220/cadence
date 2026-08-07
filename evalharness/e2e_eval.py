@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from agent.execution import run_query
+from agent.graph import run_agent
 from evalharness.oracle import execution_match
 
 
@@ -78,3 +80,15 @@ def record_run(case, result, gold_rows, *, semantic_layer: bool,
         gold_tables=list(case.required_tables),
         failure_stage=_failure_stage(result, match),
     )
+
+
+def run_case(db_path, tables, case, model, *, semantic_layer: bool,
+             retrieval_config: str = "lexical") -> EvalRecord:
+    """Execute the gold SQL (fixture self-check), run the full agent, score one record."""
+    gold = run_query(db_path, case.gold_sql, tables=tables)
+    if not gold.ok:
+        raise RuntimeError(f"{case.id}: gold_sql failed to execute: {gold.error}")
+    result = run_agent(db_path, case.question, model=model, tables=tables,
+                       semantic_layer=semantic_layer)
+    return record_run(case, result, gold.rows, semantic_layer=semantic_layer,
+                      retrieval_config=retrieval_config)
