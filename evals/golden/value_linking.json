@@ -5,6 +5,7 @@
     "question": "How many open tickets does Globex Corporation have?",
     "required_tables": ["company", "ticket"],
     "expect_value_hit": true,
+    "gold_sql": "SELECT COUNT(*) FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Globex Corporation' AND t.status='open'",
     "note": "'Globex Corporation' is a searchable company value with no lexical/table footing; value retrieval must link it to company, and the FK closure recovers ticket."
   },
   {
@@ -13,6 +14,7 @@
     "question": "北京数据科技有限公司 有几份合同?",
     "required_tables": ["company", "agreement"],
     "expect_value_hit": true,
+    "gold_sql": "SELECT COUNT(*) FROM agreement a JOIN company c ON c.company_id=a.company_id WHERE c.company_name='北京数据科技有限公司'",
     "note": "Chinese company name -> company; agreement recovered via FK."
   },
   {
@@ -21,6 +23,7 @@
     "question": "What is the SKU of the Acme Widget product?",
     "required_tables": ["catalog"],
     "expect_value_hit": true,
+    "gold_sql": "SELECT sku FROM catalog WHERE name='Acme Widget'",
     "note": "'Acme Widget' is a searchable catalog product name."
   },
   {
@@ -29,6 +32,7 @@
     "question": "Show open tickets for Globexx Corporaton",
     "required_tables": ["company", "ticket"],
     "expect_value_hit": true,
+    "gold_sql": "SELECT t.subject FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Globex Corporation' AND t.status='open' ORDER BY t.subject",
     "note": "Near-spelling ('Globexx Corporaton') must still fuzzy-link to the Globex company; the table word 'tickets' provides the lexical admission footing."
   },
   {
@@ -37,6 +41,7 @@
     "question": "Which account owns contract CT-2025-0042?",
     "required_tables": ["agreement", "company"],
     "expect_value_hit": true,
+    "gold_sql": "SELECT c.company_name FROM company c JOIN agreement a ON a.company_id=c.company_id WHERE a.external_id='CT-2025-0042'",
     "note": "Contract external id 'CT-2025-0042' -> agreement; company recovered via FK."
   },
   {

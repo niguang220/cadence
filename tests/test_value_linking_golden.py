@@ -3,6 +3,7 @@ the fixture — positive cases' seeded values link to their expected owner table
 backend), negatives produce no admitting value hit and never touch a PII column."""
 from agent.db.build_value_db import build
 from agent.db.introspect import introspect
+from agent.execution import run_query
 from agent.retrieval.channels import ValueChannel
 from agent.retrieval.value_backend import FakeValueBackend
 from agent.retrieval.value_index import build_value_index
@@ -50,3 +51,13 @@ def test_negative_cases_have_no_admitting_hit_and_no_pii(tmp_path):
         sigs = ValueChannel(b).signals(c.question, tables)
         assert not any(s.match_type in _HIGH_CONF for s in sigs), f"{c.id}: admitting value hit"
         assert all(s.column not in {"email", "full_name", "phone"} for s in sigs), f"{c.id}: PII"
+
+
+def test_positive_gold_sql_runs_nonempty_on_fixture(tmp_path):
+    # the E2E oracle: each positive's gold_sql must execute and return rows on the fixture
+    db = build(tmp_path / "v.db")
+    tables = introspect(db)
+    for c in load_value_linking():
+        if c.category in _POSITIVE:
+            res = run_query(db, c.gold_sql, tables=tables)
+            assert res.ok and res.rows, f"{c.id}: gold_sql failed or empty ({res.error})"

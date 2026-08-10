@@ -74,6 +74,7 @@ class ValueLinkingCase:
     question: str
     required_tables: list[str] = field(default_factory=list)
     expect_value_hit: bool = True
+    gold_sql: str = ""       # required for positives (the full-agent E2E oracle); empty for negatives
     note: str = ""
 
 
@@ -153,9 +154,13 @@ def load_value_linking(path: Path = VALUE_LINKING_PATH) -> list[ValueLinkingCase
                 raise ValueError(f"{path}: positive case {c.id!r} must expect a value hit")
             if not c.required_tables:
                 raise ValueError(f"{path}: positive case {c.id!r} needs required_tables")
+            if not c.gold_sql.strip():
+                raise ValueError(f"{path}: positive case {c.id!r} needs a gold_sql (E2E oracle)")
         else:                                       # no_hit / pii / off_topic are negatives
             if c.expect_value_hit:
                 raise ValueError(f"{path}: negative case {c.id!r} must not expect a value hit")
+            if c.gold_sql.strip():
+                raise ValueError(f"{path}: negative case {c.id!r} must not carry a gold_sql")
     return cases
 
 
