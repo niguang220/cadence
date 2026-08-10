@@ -128,7 +128,9 @@ def _semantic_metrics(state: AgentState) -> list[MetricDef]:
     if not state.get("semantic_layer"):
         return []
     thresh = state.get("threshold", 0.5)
-    return _metric_registry().retrieve(state["question"], threshold=thresh)
+    # alias-only binding mirrors preflight: dense hits are discovery, never request-bound.
+    hits = _metric_registry().retrieve_matches(state["question"], threshold=thresh)
+    return [h.metric for h in hits if h.match_type == "alias"]
 
 
 def _preflight_context(state: AgentState) -> dict:
@@ -139,16 +141,24 @@ def _preflight_context(state: AgentState) -> dict:
         registry = _metric_registry()
         validate_all_metrics(registry, tables)      # G4: validate every semantic preflight; no memo
         hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
-    metrics = [h.metric for h in hits]
+    # Governance precision: only alias (exact governed-term) hits BIND -- they drive the MUST-apply
+    # prompt metrics AND become protected anchors. Dense hits are discovery/telemetry only: a fuzzy
+    # similarity must never inject MUST filters or protect required_tables over a plain structural
+    # query (that regressed controls like ctrl_invoices_2025). Same single retrieval, just split.
+    bound = [h for h in hits if h.match_type == "alias"]
+    dense = [h for h in hits if h.match_type != "alias"]
+    metrics = [h.metric for h in bound]
     options = build_clarification_options(state["question"], tables=tables, metrics=metrics)
     out = {
-        "semantic_metrics": _serialize_metrics(metrics),        # unchanged: MetricDefs for prompts
-        "semantic_metric_hits": serialize_hits(hits),           # NEW: typed hits for the pipeline
+        "semantic_metrics": _serialize_metrics(metrics),        # bound MetricDefs for prompts (alias-only)
+        "semantic_metric_hits": serialize_hits(bound),          # bound typed hits for the pipeline (alias-only)
         "clarification_options": options,
         "trace": [{
             "node": "preflight_context",
             "tables": len(tables),
             "semantic_metrics": [m.name for m in metrics],
+            "dense_discovery": [{"metric": h.metric.name, "match_type": h.match_type,
+                                 "score": h.score} for h in dense],   # telemetry only, not bound
             "clarification_options": [o["label"] for o in options],
         }],
     }
