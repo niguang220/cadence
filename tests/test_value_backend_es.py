@@ -5,7 +5,8 @@ ES via docker-compose.es.yml). The channel/pipeline/ingestion logic is fully cov
 the FakeValueBackend; these tests prove the ES wire behavior and fake<->ES parity."""
 import pytest
 
-from agent.retrieval.value_backend import FakeValueBackend, ValueDoc
+from agent.retrieval.value_backend import (ElasticsearchValueBackend, FakeValueBackend,
+                                            ValueBackendError, ValueDoc)
 
 pytestmark = pytest.mark.es_integration
 
@@ -45,6 +46,31 @@ def test_es_prune_removes_stale(es_backend):
     es_backend.prune({"d1"})
     hits = es_backend.search("Acme Corp Widget", allowed=ALLOW)
     assert {h.value for h in hits} == {"Widget"}
+
+
+def test_es_upsert_raises_on_partial_bulk_failure(es_backend):
+    """A bulk where SOME items index and SOME are rejected must fail loud. We force a deterministic
+    per-item rejection with a test-only incompatible mapping (value as a long): a numeric value
+    coerces and indexes, a text value is rejected -> errors=true with a mixed items list. The old
+    implementation swallowed this (bulk returned errors=true but never raised)."""
+    es = es_backend._es
+    idx = "cadence-values-itest-partial"
+    es.indices.delete(index=idx, ignore_unavailable=True)
+    es.indices.create(index=idx, mappings={"properties": {
+        "table": {"type": "keyword"}, "column": {"type": "keyword"},
+        "value": {"type": "long"}}})                              # incompatible on purpose
+    backend = ElasticsearchValueBackend(es, idx)
+    docs = [ValueDoc("ok", "product", "name", "123"),             # coerces to long -> indexes
+            ValueDoc("bad", "product", "name", "Widget")]         # not numeric -> rejected
+    try:
+        with pytest.raises(ValueBackendError) as ei:
+            backend.upsert(docs)
+        msg = str(ei.value)
+        assert "upsert" in msg and "1/2" in msg                   # op type + failed/total
+        assert "Widget" not in msg and "product" not in msg       # no raw value / document source
+        assert "mapper_parsing" not in msg and "reason" not in msg  # no full ES error reason
+    finally:
+        es.indices.delete(index=idx, ignore_unavailable=True)
 
 
 def test_fake_and_es_agree_on_owner_and_tier(es_backend):

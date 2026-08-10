@@ -3,8 +3,11 @@
 The fake is a deterministic in-memory stand-in so the channel/pipeline/ingestion logic is fully
 tested without Docker: it produces the same four match types the ES backend will
 (exact_keyword > exact_phrase > token_match > fuzzy) and restricts search to the allowlist."""
-from agent.retrieval.value_backend import (FakeValueBackend, ValueBackendError, ValueDoc,
-                                            ValueHit)
+import pytest
+
+from agent.retrieval.value_backend import (ElasticsearchValueBackend, FakeValueBackend,
+                                            ValueBackendError, ValueDoc, ValueHit,
+                                            _bulk_error_summary)
 
 
 def _docs():
@@ -79,3 +82,67 @@ def test_upsert_is_idempotent_by_document_id():
 def test_backend_error_type_exists():
     assert issubclass(ValueBackendError, Exception)
     assert isinstance(ValueHit("t", "c", "v", "exact_keyword", 1.0, "d"), ValueHit)
+
+
+# --- bulk partial-failure detection (pure function; no ES) --------------------------------------
+
+def test_bulk_error_summary_none_when_no_errors():
+    assert _bulk_error_summary({"errors": False, "items": []}) is None
+
+
+def test_bulk_error_summary_flags_index_item_failures():
+    body = {"errors": True, "items": [
+        {"index": {"_id": "a", "status": 201}},
+        {"index": {"_id": "b", "status": 400,
+                   "error": {"type": "mapper_parsing_exception", "reason": "leaky value here"}}}]}
+    assert _bulk_error_summary(body) == (1, 2, [400])
+
+
+def test_bulk_error_summary_flags_delete_item_failures():
+    body = {"errors": True, "items": [
+        {"delete": {"_id": "a", "status": 200}},
+        {"delete": {"_id": "b", "status": 409,
+                    "error": {"type": "version_conflict_engine_exception"}}}]}
+    assert _bulk_error_summary(body) == (1, 2, [409])
+
+
+def test_bulk_error_summary_ignores_not_found_delete():
+    # a delete of a missing doc is status 404 with no error key and errors=False -> not a failure
+    body = {"errors": False, "items": [{"delete": {"_id": "a", "status": 404, "result": "not_found"}}]}
+    assert _bulk_error_summary(body) is None
+
+
+class _StubES:
+    """Minimal stand-in for the ES client: prune's match_all search + a canned bulk response."""
+
+    def __init__(self, search_ids, bulk_body):
+        self._search_ids = search_ids
+        self._bulk_body = bulk_body
+        self.bulk_ops = None
+
+    def search(self, **_kw):
+        return {"hits": {"hits": [{"_id": i} for i in self._search_ids]}}
+
+    def bulk(self, *, operations, **_kw):
+        self.bulk_ops = operations
+        return self._bulk_body
+
+
+def test_prune_raises_on_delete_bulk_partial_failure():
+    stub = _StubES(search_ids=["stale1", "keep1"],
+                   bulk_body={"errors": True, "items": [
+                       {"delete": {"_id": "stale1", "status": 409, "error": {"type": "x"}}}]})
+    backend = ElasticsearchValueBackend(stub, "idx")
+    with pytest.raises(ValueBackendError) as ei:
+        backend.prune(keep_ids={"keep1"})
+    msg = str(ei.value)
+    assert "prune" in msg and "1/1" in msg           # op type + failed/total
+    assert "stale1" not in msg and "409" in msg      # no doc id; http status allowed
+
+
+def test_prune_succeeds_when_deletes_clean():
+    stub = _StubES(search_ids=["stale1", "keep1"],
+                   bulk_body={"errors": False, "items": [{"delete": {"_id": "stale1", "status": 200}}]})
+    backend = ElasticsearchValueBackend(stub, "idx")
+    backend.prune(keep_ids={"keep1"})                # must not raise
+    assert stub.bulk_ops == [{"delete": {"_index": "idx", "_id": "stale1"}}]
