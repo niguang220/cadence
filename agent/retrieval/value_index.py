@@ -18,8 +18,11 @@ from agent.retrieval.value_policy import resolve_searchable_columns
 
 
 def index_name(tables: list[Table]) -> str:
-    """Schema-fingerprinted index name, so a schema change lands in a fresh index."""
-    return f"cadence-values-{_schema_fingerprint(tables)}"
+    """Schema-fingerprinted index name. The fingerprint is HASHED to a lowercase hex digest so the
+    name is a valid Elasticsearch index name (the raw fingerprint tuple contains spaces/commas/
+    parens, which ES rejects — a bug the no-op FakeValueBackend could not surface)."""
+    fp = hashlib.sha1(repr(_schema_fingerprint(tables)).encode("utf-8")).hexdigest()[:16]
+    return f"cadence-values-{fp}"
 
 
 def document_id(table: str, column: str, value: str) -> str:
