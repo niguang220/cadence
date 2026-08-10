@@ -15,6 +15,7 @@ _GOLDEN_DIR = Path(__file__).resolve().parent.parent / "evals" / "golden"
 GATE_PATH = _GOLDEN_DIR / "gate.json"
 CONSISTENCY_PATH = _GOLDEN_DIR / "consistency.json"
 SANDBOX_PATH = _GOLDEN_DIR / "sandbox.json"
+SAAS_METRICS_PATH = _GOLDEN_DIR / "saas_metrics.json"
 
 _ROUTES = {"out_of_scope", "feasibility_refuse", "proceed"}
 _CATEGORIES = {"measure", "grain", "entity", "dropped_filter"}
@@ -49,6 +50,18 @@ class SandboxCase:
     expected_output: object
     tolerance: float = 1e-6
     wrong_program: str = ""
+
+
+@dataclass
+class SaasMetricsCase:
+    id: str
+    category: str            # one of the 7 metric families, or "control"
+    metric: str
+    question: str
+    gold_sql: str
+    wrong_sql: str = ""
+    required_tables: list[str] = field(default_factory=list)
+    note: str = ""
 
 
 def _rows(path: Path) -> list[dict]:
@@ -104,6 +117,16 @@ def load_sandbox(path: Path = SANDBOX_PATH) -> list[SandboxCase]:
             raise ValueError(f"{path}: case {c.id!r} input.truncated must be false (full results only)")
         if _contains_chart(c.expected_output):
             raise ValueError(f"{path}: case {c.id!r} expected_output must not contain a chart (at any depth)")
+    return cases
+
+
+def load_saas_metrics(path: Path = SAAS_METRICS_PATH) -> list[SaasMetricsCase]:
+    cases = _build(SaasMetricsCase, path)
+    for c in cases:
+        if not c.required_tables:
+            raise ValueError(f"{path}: case {c.id!r} has empty required_tables")
+        if not c.gold_sql.strip():
+            raise ValueError(f"{path}: case {c.id!r} has empty gold_sql")
     return cases
 
 
