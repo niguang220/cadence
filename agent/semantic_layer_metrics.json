@@ -34,7 +34,7 @@
   },
   {
     "name": "mrr_weighted_churn",
-    "aliases": ["churn", "churn rate", "revenue churn", "MRR churn"],
+    "aliases": ["churn", "churn rate", "revenue churn", "MRR churn", "recurring revenue churned"],
     "definition": "Revenue-weighted churn = churned MRR in the period / MRR active at period start (not logo count). Numerator and denominator computed separately.",
     "measure": "SUM(-mrr_delta)",
     "grain": "period ratio (numerator / denominator)",
@@ -69,7 +69,7 @@
   },
   {
     "name": "arpu",
-    "aliases": ["ARPU", "average revenue per user", "average revenue per account"],
+    "aliases": ["ARPU", "average revenue per user", "average revenue per account", "average MRR per paying account"],
     "definition": "Average MRR per paying account; excludes free, trial, comped, and staff subscriptions as well as test accounts.",
     "measure": "SUM(subscription.mrr) / COUNT(DISTINCT subscription.account_id)",
     "grain": "per paying account",
@@ -119,7 +119,7 @@
   },
   {
     "name": "recognized_revenue",
-    "aliases": ["recognized revenue", "revenue recognition", "recognized revenue total", "deferred revenue recognized", "GAAP revenue"],
+    "aliases": ["recognized revenue", "revenue recognition", "recognized revenue total", "deferred revenue recognized", "GAAP revenue", "revenue did we recognize"],
     "definition": "Amortized monthly revenue recognized in the period per GAAP/ASC 606 accrual rules, sourced from revenue_recognition table.",
     "measure": "SUM(revenue_recognition.amount)",
     "grain": "period total",
