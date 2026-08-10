@@ -20,8 +20,12 @@ VALUE_LINKING_PATH = _GOLDEN_DIR / "value_linking.json"
 
 _ROUTES = {"out_of_scope", "feasibility_refuse", "proceed"}
 _CATEGORIES = {"measure", "grain", "entity", "dropped_filter"}
-_VALUE_LINKING_CATEGORIES = {"en", "zh", "fuzzy", "no_hit", "pii", "off_topic"}
-_VALUE_LINKING_POSITIVE = {"en", "zh", "fuzzy"}
+_VALUE_LINKING_CATEGORIES = {"en", "zh", "code", "homonym", "fuzzy",           # positive families
+                             "no_hit", "pii", "public_col", "off_topic",       # negatives
+                             "cross_table", "injection"}                        # safety
+_VALUE_LINKING_ROLES = {"primary", "diagnostic", "negative", "safety"}
+# roles that must resolve a value to a table (scored for candidate recall / Fusion@5)
+_VALUE_LINKING_LINKING = {"primary", "diagnostic"}
 
 
 @dataclass
@@ -70,11 +74,15 @@ class SaasMetricsCase:
 @dataclass
 class ValueLinkingCase:
     id: str
-    category: str            # en | zh | fuzzy | no_hit | pii | off_topic
+    category: str            # see _VALUE_LINKING_CATEGORIES
     question: str
+    role: str = "primary"    # primary | diagnostic | negative | safety
     required_tables: list[str] = field(default_factory=list)
     expect_value_hit: bool = True
-    gold_sql: str = ""       # required for positives (the full-agent E2E oracle); empty for negatives
+    gold_sql: str = ""       # required for primary/diagnostic (the full-agent E2E oracle)
+    expected_table: str = ""     # the table the value must link to (primary/diagnostic)
+    expected_column: str = ""    # the searchable column the value lives in
+    discriminative_reason: str = ""   # why lexical can't naturally hit it (rank-sensitivity)
     note: str = ""
 
 
@@ -149,18 +157,27 @@ def load_value_linking(path: Path = VALUE_LINKING_PATH) -> list[ValueLinkingCase
     for c in cases:
         if c.category not in _VALUE_LINKING_CATEGORIES:
             raise ValueError(f"{path}: case {c.id!r} bad category {c.category!r}")
-        if c.category in _VALUE_LINKING_POSITIVE:
+        if c.role not in _VALUE_LINKING_ROLES:
+            raise ValueError(f"{path}: case {c.id!r} bad role {c.role!r}")
+        if c.role in _VALUE_LINKING_LINKING:        # primary / diagnostic must resolve a value
             if not c.expect_value_hit:
-                raise ValueError(f"{path}: positive case {c.id!r} must expect a value hit")
+                raise ValueError(f"{path}: {c.role} case {c.id!r} must expect a value hit")
             if not c.required_tables:
-                raise ValueError(f"{path}: positive case {c.id!r} needs required_tables")
+                raise ValueError(f"{path}: {c.role} case {c.id!r} needs required_tables")
             if not c.gold_sql.strip():
-                raise ValueError(f"{path}: positive case {c.id!r} needs a gold_sql (E2E oracle)")
-        else:                                       # no_hit / pii / off_topic are negatives
+                raise ValueError(f"{path}: {c.role} case {c.id!r} needs a gold_sql (E2E oracle)")
+            if not (c.expected_table and c.expected_column):
+                raise ValueError(f"{path}: {c.role} case {c.id!r} needs expected_table/expected_column")
+            if not c.discriminative_reason.strip():
+                raise ValueError(f"{path}: {c.role} case {c.id!r} needs a discriminative_reason")
+        elif c.role == "negative":
             if c.expect_value_hit:
                 raise ValueError(f"{path}: negative case {c.id!r} must not expect a value hit")
             if c.gold_sql.strip():
                 raise ValueError(f"{path}: negative case {c.id!r} must not carry a gold_sql")
+        elif c.role == "safety":                    # injection / cross_table DO hit, but must be safe
+            if c.gold_sql.strip():
+                raise ValueError(f"{path}: safety case {c.id!r} must not carry a gold_sql")
     return cases
 
 

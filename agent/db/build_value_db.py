@@ -60,7 +60,9 @@ INSERT INTO company VALUES
   (4,'Umbrella Health',2,2,1),(5,'Stark Industries',1,1,2),(6,'Wayne Enterprises',1,3,1),
   (7,'Cyberdyne Systems',3,1,2),(8,'Wonka Industries',2,2,1),(9,'Soylent Corp',1,3,2),
   (10,'Tyrell Corporation',3,1,1),(11,'Massive Dynamic',1,1,2),(12,'Aperture Science',2,1,1),
-  (13,'Hooli',1,1,2),(14,'Pied Piper',1,1,1),(15,'Vandelay Industries',2,3,2),(16,'Gekko Capital',1,3,1);
+  (13,'Hooli',1,1,2),(14,'Pied Piper',1,1,1),(15,'Vandelay Industries',2,3,2),(16,'Gekko Capital',1,3,1),
+  (17,'上海云图信息技术',1,1,1),(18,'深圳前海智能科技',2,1,2),(19,'广州天河数据服务',3,3,1),
+  (20,'杭州西湖网络',1,1,2),(21,'Pinnacle',1,1,1),(22,'Bobby "DROP" Tables Inc',1,1,1);
 INSERT INTO person VALUES
   (1,1,'John Smith','john.smith@globex.com','+1-202-555-0101'),
   (2,1,'Mary Jones','mary.jones@globex.com','+1-202-555-0102'),
@@ -72,7 +74,7 @@ INSERT INTO catalog VALUES
   (5,'StreamForge','STF-500',2),(6,'PixelPerfect','PXP-600',1),(7,'QuantumCore','QTC-700',2),
   (8,'NimbusEdge','NBE-800',1),(9,'IronGate','IRG-900',2),(10,'SwiftLedger','SWL-1000',1),
   (11,'BrightAnalytics','BRA-1100',2),(12,'SecureMailer','SCM-1200',1),(13,'FleetTracker','FLT-1300',2),
-  (14,'OmniDash','OMD-1400',1);
+  (14,'OmniDash','OMD-1400',1),(15,'Pinnacle','PIN-1500',1),(16,'MegaWidget','WGT-1000',2);
 INSERT INTO agreement VALUES
   (1,'CT-2025-0042',1,3,'2025-01-01','2025-12-31'),
   (2,'CT-2025-0099',3,2,'2025-02-01','2026-01-31'),(3,'CT-2025-0100',2,1,'2025-03-01',NULL),
@@ -81,7 +83,8 @@ INSERT INTO agreement VALUES
   (8,'CT-2025-0105',8,2,'2025-03-15',NULL),(9,'CT-2025-0106',9,3,'2025-04-01',NULL),
   (10,'CT-2025-0107',10,2,'2025-04-10',NULL),(11,'CT-2025-0108',11,1,'2025-05-01',NULL),
   (12,'CT-2025-0109',12,2,'2025-05-15',NULL),(13,'CT-2025-0110',13,3,'2025-06-01',NULL),
-  (14,'CT-2025-0111',14,2,'2025-06-10',NULL);
+  (14,'CT-2025-0111',14,2,'2025-06-10',NULL),
+  (15,'CT-2025-0200',19,1,'2025-07-01',NULL),(16,'CT-2025-0201',19,2,'2025-08-01',NULL);
 INSERT INTO deal VALUES
   (1,'Globex Renewal 2025',1,'won',120000.0),
   (2,'Initech Expansion',2,'open',45000.0),
@@ -91,7 +94,9 @@ INSERT INTO ticket VALUES
   (1,1,'Login issue','open'),
   (2,1,'Billing question','closed'),
   (3,2,'API error','open'),
-  (4,3,'Feature request','open');
+  (4,3,'Feature request','open'),
+  (5,17,'Export fails','open'),(6,17,'Slow dashboard','open'),(7,18,'SSO error','open'),
+  (8,19,'Billing dispute','closed'),(9,21,'Setup help','open');
 INSERT INTO ticket_note VALUES (1,1,'Investigating the SSO callback.'),(2,3,'Rate limit hit.');
 INSERT INTO shipment VALUES (1,'TRK-77-ABCD',1),(2,'TRK-88-WXYZ',2);
 INSERT INTO usage_log VALUES

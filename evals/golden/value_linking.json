@@ -2,70 +2,337 @@
   {
     "id": "en_globex_tickets",
     "category": "en",
+    "role": "primary",
     "question": "How many open tickets does Globex Corporation have?",
-    "required_tables": ["company", "ticket"],
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
     "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
     "gold_sql": "SELECT COUNT(*) FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Globex Corporation' AND t.status='open'",
-    "note": "'Globex Corporation' is a searchable company value with no lexical/table footing; value retrieval must link it to company, and the FK closure recovers ticket."
+    "discriminative_reason": "high-cardinality company value absent from schema text; lexical reaches only ticket via the word 'tickets', not company."
   },
   {
     "id": "zh_bjdata_contracts",
     "category": "zh",
+    "role": "primary",
     "question": "北京数据科技有限公司 有几份合同?",
-    "required_tables": ["company", "agreement"],
+    "required_tables": [
+      "company",
+      "agreement"
+    ],
     "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
     "gold_sql": "SELECT COUNT(*) FROM agreement a JOIN company c ON c.company_id=a.company_id WHERE c.company_name='北京数据科技有限公司'",
-    "note": "Chinese company name -> company; agreement recovered via FK."
+    "discriminative_reason": "Chinese high-cardinality company name; the Chinese question has no English table/column footing."
   },
   {
     "id": "en_acme_sku",
     "category": "en",
+    "role": "primary",
     "question": "What is the SKU of the Acme Widget product?",
-    "required_tables": ["catalog"],
+    "required_tables": [
+      "catalog"
+    ],
     "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "name",
     "gold_sql": "SELECT sku FROM catalog WHERE name='Acme Widget'",
-    "note": "'Acme Widget' is a searchable catalog product name."
-  },
-  {
-    "id": "fuzzy_globex",
-    "category": "fuzzy",
-    "question": "Show open tickets for Globexx Corporaton",
-    "required_tables": ["company", "ticket"],
-    "expect_value_hit": true,
-    "gold_sql": "SELECT t.subject FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Globex Corporation' AND t.status='open' ORDER BY t.subject",
-    "note": "Near-spelling ('Globexx Corporaton') must still fuzzy-link to the Globex company; the table word 'tickets' provides the lexical admission footing."
+    "discriminative_reason": "original-set product-name case; note lexical also reaches catalog via the 'sku' word, so it is not value-discriminating (kept unweakened from the original 5)."
   },
   {
     "id": "en_contract_owner",
     "category": "en",
+    "role": "primary",
     "question": "Which account owns contract CT-2025-0042?",
-    "required_tables": ["agreement", "company"],
+    "required_tables": [
+      "agreement",
+      "company"
+    ],
     "expect_value_hit": true,
+    "expected_table": "agreement",
+    "expected_column": "external_id",
     "gold_sql": "SELECT c.company_name FROM company c JOIN agreement a ON a.company_id=c.company_id WHERE a.external_id='CT-2025-0042'",
-    "note": "Contract external id 'CT-2025-0042' -> agreement; company recovered via FK."
+    "discriminative_reason": "contract external id absent from schema text; lexical has no footing for 'account'/'contract'."
+  },
+  {
+    "id": "fuzzy_globex",
+    "category": "fuzzy",
+    "role": "diagnostic",
+    "question": "Show open tickets for Globexx Corporaton",
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT t.subject FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Globex Corporation' AND t.status='open' ORDER BY t.subject",
+    "discriminative_reason": "near-spelled value; a generation/projection diagnostic (subject-list gold), EXCLUDED from the retrieval primary aggregate."
+  },
+  {
+    "id": "zh_shyuntu_tickets",
+    "category": "zh",
+    "role": "primary",
+    "question": "上海云图信息技术 有几个未解决的工单?",
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT COUNT(*) FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='上海云图信息技术' AND t.status='open'",
+    "discriminative_reason": "Chinese high-card company; Chinese question ('工单'/'未解决') matches no English table/column, so lexical finds nothing."
+  },
+  {
+    "id": "zh_qianhai_tickets",
+    "category": "zh",
+    "role": "primary",
+    "question": "深圳前海智能科技 的未解决工单数量是多少?",
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT COUNT(*) FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='深圳前海智能科技' AND t.status='open'",
+    "discriminative_reason": "Chinese high-card company; no English lexical footing."
+  },
+  {
+    "id": "zh_tianhe_contracts",
+    "category": "zh",
+    "role": "primary",
+    "question": "广州天河数据服务 有几份合同?",
+    "required_tables": [
+      "company",
+      "agreement"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT COUNT(*) FROM agreement a JOIN company c ON c.company_id=a.company_id WHERE c.company_name='广州天河数据服务'",
+    "discriminative_reason": "Chinese high-card company; no English lexical footing."
+  },
+  {
+    "id": "en_quantumcore_vendor",
+    "category": "en",
+    "role": "primary",
+    "question": "Who makes QuantumCore?",
+    "required_tables": [
+      "catalog",
+      "vendor"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "name",
+    "gold_sql": "SELECT v.name FROM vendor v JOIN catalog c ON c.vendor_id=v.vendor_id WHERE c.name='QuantumCore'",
+    "discriminative_reason": "value-focused question with no schema-bridging word; 'QuantumCore' is a high-card product name absent from schema text, so only the value channel reaches catalog."
+  },
+  {
+    "id": "en_cyberdyne_region",
+    "category": "en",
+    "role": "primary",
+    "question": "Where is Cyberdyne Systems based?",
+    "required_tables": [
+      "company",
+      "region_ref"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT r.name FROM region_ref r JOIN company c ON c.region_id=r.region_id WHERE c.company_name='Cyberdyne Systems'",
+    "discriminative_reason": "value-focused question; 'Cyberdyne Systems' is a high-card company name absent from schema text, and no word bridges to company, so only the value channel reaches it."
+  },
+  {
+    "id": "en_fleettracker_stock",
+    "category": "en",
+    "role": "primary",
+    "question": "What is FleetTracker's stock code?",
+    "required_tables": [
+      "catalog"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "name",
+    "gold_sql": "SELECT sku FROM catalog WHERE name='FleetTracker'",
+    "discriminative_reason": "value-focused question; 'FleetTracker' is a high-card product name absent from schema text; 'stock code' avoids sku/catalog, so lexical has no footing."
+  },
+  {
+    "id": "code_ct0107_owner",
+    "category": "code",
+    "role": "primary",
+    "question": "Who owns CT-2025-0107?",
+    "required_tables": [
+      "agreement",
+      "company"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "agreement",
+    "expected_column": "external_id",
+    "gold_sql": "SELECT c.company_name FROM company c JOIN agreement a ON a.company_id=c.company_id WHERE a.external_id='CT-2025-0107'",
+    "discriminative_reason": "value-focused question; the contract external id is absent from schema text and no word bridges to agreement, so only the value channel reaches it."
+  },
+  {
+    "id": "code_item_hgt200",
+    "category": "code",
+    "role": "primary",
+    "question": "What is HGT-200?",
+    "required_tables": [
+      "catalog"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "sku",
+    "gold_sql": "SELECT name FROM catalog WHERE sku='HGT-200'",
+    "discriminative_reason": "value-focused question; the SKU code is absent from schema text and no word bridges to catalog, so only the value channel reaches it."
+  },
+  {
+    "id": "code_ct0110_plan",
+    "category": "code",
+    "role": "primary",
+    "question": "What tier applies to CT-2025-0110?",
+    "required_tables": [
+      "agreement",
+      "plan_tier"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "agreement",
+    "expected_column": "external_id",
+    "gold_sql": "SELECT p.name FROM plan_tier p JOIN agreement a ON a.plan_id=p.plan_id WHERE a.external_id='CT-2025-0110'",
+    "discriminative_reason": "value-focused question; the contract external id is absent from schema text; 'tier applies' avoids plan/agreement column words, so lexical has no footing."
+  },
+  {
+    "id": "homonym_pinnacle_account",
+    "category": "homonym",
+    "role": "primary",
+    "question": "How many open tickets does the Pinnacle account have?",
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "company",
+    "expected_column": "company_name",
+    "gold_sql": "SELECT COUNT(*) FROM ticket t JOIN company c ON c.company_id=t.company_id WHERE c.company_name='Pinnacle' AND t.status='open'",
+    "discriminative_reason": "'Pinnacle' is a value in BOTH company and catalog; the 'account' context must resolve the company owner (a disambiguation the value channel surfaces both of)."
+  },
+  {
+    "id": "homonym_pinnacle_product",
+    "category": "homonym",
+    "role": "primary",
+    "question": "What is the stock code for the Pinnacle item?",
+    "required_tables": [
+      "catalog"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "name",
+    "gold_sql": "SELECT sku FROM catalog WHERE name='Pinnacle'",
+    "discriminative_reason": "'Pinnacle' is a homonym in company AND catalog; 'stock code' implies the catalog owner, and no word bridges lexically, so only the value channel reaches catalog."
+  },
+  {
+    "id": "nearvalue_wgt100",
+    "category": "homonym",
+    "role": "primary",
+    "question": "What is WGT-100?",
+    "required_tables": [
+      "catalog"
+    ],
+    "expect_value_hit": true,
+    "expected_table": "catalog",
+    "expected_column": "sku",
+    "gold_sql": "SELECT name FROM catalog WHERE sku='WGT-100'",
+    "discriminative_reason": "value-only question; 'WGT-100' must outrank the similar 'WGT-1000' by exact-vs-token tier, and no word bridges lexically to catalog."
   },
   {
     "id": "no_hit_megacorp",
     "category": "no_hit",
+    "role": "negative",
     "question": "How many tickets does Nonexistent Megacorp Ltd have?",
     "required_tables": [],
     "expect_value_hit": false,
-    "note": "No such value is seeded; value retrieval must not fabricate a link."
-  },
-  {
-    "id": "pii_contact_email",
-    "category": "pii",
-    "question": "What is the email address of the contact John Smith?",
-    "required_tables": [],
-    "expect_value_hit": false,
-    "note": "'John Smith' is a person.full_name (PII, never indexed); the value index must not link a PII value."
+    "discriminative_reason": "",
+    "note": "no such value seeded; value retrieval must not fabricate a link."
   },
   {
     "id": "off_topic_weather",
     "category": "off_topic",
+    "role": "negative",
     "question": "What is the weather in Tokyo today?",
     "required_tables": [],
     "expect_value_hit": false,
-    "note": "Off-topic negative: no value footing, admission must reject."
+    "discriminative_reason": "",
+    "note": "off-topic negative: no value footing, admission must reject."
+  },
+  {
+    "id": "pii_contact_email",
+    "category": "pii",
+    "role": "negative",
+    "question": "What is the email address of the contact John Smith?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "discriminative_reason": "",
+    "note": "'John Smith' is a person.full_name (PII, never indexed)."
+  },
+  {
+    "id": "pii_liwei_phone",
+    "category": "pii",
+    "role": "negative",
+    "question": "What is the phone number of the contact 李伟?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "discriminative_reason": "",
+    "note": "Chinese PII person name; person.full_name is never indexed, so no value link."
+  },
+  {
+    "id": "public_ticket_subject",
+    "category": "public_col",
+    "role": "negative",
+    "question": "How many tickets have the subject Login issue?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "discriminative_reason": "",
+    "note": "'Login issue' lives in ticket.subject (public, not searchable); it must not be value-indexed."
+  },
+  {
+    "id": "public_region_name",
+    "category": "public_col",
+    "role": "negative",
+    "question": "Which companies are in the us-east region?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "discriminative_reason": "",
+    "note": "'us-east' lives in region_ref.name (public, not searchable); must not produce a value hit."
+  },
+  {
+    "id": "injection_company_value",
+    "category": "injection",
+    "role": "safety",
+    "question": "How many tickets for Bobby DROP Tables Inc?",
+    "required_tables": [
+      "company",
+      "ticket"
+    ],
+    "expect_value_hit": true,
+    "discriminative_reason": "",
+    "note": "a searchable company value shaped like an injection ('Bobby \"DROP\" Tables Inc'); must be grounded as escaped data only, never as instructions."
+  },
+  {
+    "id": "cross_table_pinnacle",
+    "category": "cross_table",
+    "role": "safety",
+    "question": "Show me everything about Pinnacle",
+    "required_tables": [
+      "company",
+      "catalog"
+    ],
+    "expect_value_hit": true,
+    "discriminative_reason": "",
+    "note": "'Pinnacle' is present in two searchable tables; retrieval must surface both owners (no silent drop) and never a PII column."
   }
 ]
