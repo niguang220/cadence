@@ -93,3 +93,11 @@ def test_index_name_and_document_id_stability():
     assert index_name(_tables()).startswith("cadence-values-")
     assert document_id("product", "name", "Widget") == document_id("product", "name", "Widget")
     assert document_id("product", "name", "Widget") != document_id("product", "name", "Gadget")
+
+
+def test_index_name_is_a_valid_elasticsearch_index_name():
+    # ES rejects spaces / , / ( ) / uppercase etc.; the name must be a lowercase hex-suffixed slug.
+    import re
+    name = index_name(_tables())
+    assert name == name.lower()
+    assert re.fullmatch(r"cadence-values-[0-9a-f]+", name), name
