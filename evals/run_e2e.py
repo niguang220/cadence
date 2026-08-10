@@ -11,6 +11,7 @@ with provenance (golden SHA-256 + model + UTC timestamp) and lands in docs/relia
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import sys
@@ -27,6 +28,10 @@ from evalharness.e2e_eval import run_case, summarize
 from evalharness.golden import SAAS_METRICS_PATH, load_saas_metrics
 
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
+
+# Upper bound on parallel agent runs: the work is DeepSeek-API-bound, and past this the provider's
+# rate limit (not local CPU) is the ceiling. A caller asking for more is clamped, not rejected.
+_MAX_CONCURRENCY = 16
 
 # One retrieval config per invocation (a clean single-factor ablation). Only Stage-1 presets are
 # selectable here -- es/qdrant/llm-selector presets are deliberately out of scope this stage.
@@ -57,25 +62,47 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="Stage-1 retrieval preset to hold fixed for this run.")
     p.add_argument("--repeats", type=int, default=5, help="runs per (case, semantic-layer) pairing.")
     p.add_argument("--k", type=int, default=5, help="retrieval top-k passed to the agent.")
+    p.add_argument("--concurrency", type=int, default=1,
+                   help="parallel agent runs (default 1 = serial; 4 is a sane real value, "
+                        f"clamped to {_MAX_CONCURRENCY}).")
     return p.parse_args(argv)
 
 
 def run_e2e(db_path, tables, cases, model, *, config: RetrievalConfig, k: int = 5, repeats: int = 5,
-            semantic_layers=(False, True)) -> dict:
-    records = []
-    for repeat_index in range(repeats):
-        for semantic_layer in semantic_layers:           # OFF then ON, paired within a repeat
-            for case in cases:
-                records.append(run_case(db_path, tables, case, model, semantic_layer=semantic_layer,
-                                        config=config, k=k, repeat_index=repeat_index))
+            semantic_layers=(False, True), concurrency: int = 1) -> dict:
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be >= 1 (got {concurrency})")
+    # Deterministic work order: repeat -> semantic-layer (OFF, ON) -> case. Parallel execution
+    # reassembles results back into THIS order, so the record list, repeat_index, and ON/OFF
+    # pairing are byte-identical to the serial run regardless of concurrency.
+    plan = [(repeat_index, semantic_layer, case)
+            for repeat_index in range(repeats)
+            for semantic_layer in semantic_layers
+            for case in cases]
+
+    def _work(item):
+        repeat_index, semantic_layer, case = item
+        return run_case(db_path, tables, case, model, semantic_layer=semantic_layer,
+                        config=config, k=k, repeat_index=repeat_index)
+
+    if concurrency == 1:
+        records = [_work(item) for item in plan]
+    else:
+        results: list = [None] * len(plan)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(concurrency, _MAX_CONCURRENCY)) as ex:
+            fut_to_index = {ex.submit(_work, item): i for i, item in enumerate(plan)}
+            for fut, i in fut_to_index.items():
+                results[i] = fut.result()   # re-raises any worker exception -> propagates, no drop
+        records = results
     return {"records": [asdict(r) for r in records], "summary": summarize(records),
             "repeats": repeats, "semantic_layer_configs": list(semantic_layers),
             "retrieval_config": serialize_config(config), "retrieval_k": k}
 
 
 def build_report(db_path, tables, cases, model, *, model_name: str, config: RetrievalConfig, k: int = 5,
-                 repeats: int = 5) -> dict:
-    out = run_e2e(db_path, tables, cases, model, config=config, k=k, repeats=repeats)
+                 repeats: int = 5, concurrency: int = 1) -> dict:
+    out = run_e2e(db_path, tables, cases, model, config=config, k=k, repeats=repeats,
+                  concurrency=concurrency)
     return {"measured": True, "model": model_name,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "golden_sha256": hashlib.sha256(Path(SAAS_METRICS_PATH).read_bytes()).hexdigest(), **out}
@@ -100,7 +127,8 @@ def main(argv=None) -> None:
         db = str(build(Path(workdir) / "saas.db"))
         tables = introspect(db)
         report = build_report(db, tables, load_saas_metrics(), model, model_name=model_name,
-                              config=config, k=args.k, repeats=args.repeats)
+                              config=config, k=args.k, repeats=args.repeats,
+                              concurrency=args.concurrency)
 
     _REPORT_DIR.mkdir(parents=True, exist_ok=True)
     out = report_path(config.name, time.strftime("%Y%m%d_%H%M%S"))
