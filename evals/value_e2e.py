@@ -149,25 +149,32 @@ def _frozen_sha(cases) -> str:
 
 
 def build_report(db, tables, cases, model, value_backend, *, model_name: str,
-                 repeats: int = 5, concurrency: int = 4) -> dict:
+                 repeats: int = 5, concurrency: int = 4,
+                 primary_ids=_SELECTED_PRIMARY_IDS, control_ids=_SELECTED_CONTROL_IDS) -> dict:
     by_id = {c.id: c for c in cases}
-    primaries = [by_id[i] for i in _SELECTED_PRIMARY_IDS]     # the frozen 10 primaries
-    controls = [by_id[i] for i in _SELECTED_CONTROL_IDS]      # the frozen 4 controls
+    primaries = [by_id[i] for i in primary_ids]               # frozen 10 by default; a subset if filtered
+    controls = [by_id[i] for i in control_ids]                # frozen 4 by default
     out = run_value_e2e(db, tables, primaries, controls, model, value_backend,
                         repeats=repeats, concurrency=concurrency)
     return {"measured": True, "kind": "value_full_agent_e2e", "model": model_name,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "n_tables": len(tables),
-            "frozen_case_sha256": _frozen_sha(primaries + controls),
-            "selected_primaries": list(_SELECTED_PRIMARY_IDS),
-            "selected_controls": list(_SELECTED_CONTROL_IDS), **out}
+            "frozen_case_sha256": _frozen_sha(primaries + controls),  # over the ACTUAL selection
+            "selected_primaries": list(primary_ids),
+            "selected_controls": list(control_ids), **out}
 
 
 def main() -> None:  # pragma: no cover - requires real ES + DEEPSEEK_API_KEY
+    import argparse
     import os
     import tempfile
 
     from dotenv import load_dotenv
+    parser = argparse.ArgumentParser(description="Full-agent value E2E (real ES + real model).")
+    parser.add_argument("--case-id", action="append", dest="case_ids", metavar="ID",
+                        help="run only these primary case ids (repeatable); default = frozen 10+4. "
+                             "When given, controls are omitted (targeted subset).")
+    args = parser.parse_args()
     load_dotenv()
     es_url = os.environ.get("CADENCE_ES_URL")
     if not es_url:
@@ -185,8 +192,10 @@ def main() -> None:  # pragma: no cover - requires real ES + DEEPSEEK_API_KEY
         db = build(Path(workdir) / "value.db")
         tables = introspect(db)
         backend = ElasticsearchValueBackend.from_url(es_url, index_name(tables))
+        sel = ({"primary_ids": tuple(args.case_ids), "control_ids": ()}
+               if args.case_ids else {})                     # subset run: named primaries, no controls
         report = build_report(db, tables, load_value_linking(), model, backend,
-                              model_name=model_name)
+                              model_name=model_name, **sel)
     _REPORT_DIR.mkdir(parents=True, exist_ok=True)
     out = _REPORT_DIR / f"value_e2e_{time.strftime('%Y%m%d_%H%M%S')}.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -59,6 +59,27 @@ def test_build_report_uses_frozen_selection_and_sha(tmp_path):
     assert rep["selected_primaries"] == list(_SELECTED_PRIMARY_IDS)
 
 
+def test_build_report_honors_case_id_subset(tmp_path):
+    db, tables = _setup(tmp_path)
+    rep = build_report(db, tables, load_value_linking(), PlanningFakeModel("SELECT 1"),
+                       FakeValueBackend(), model_name="fake", repeats=1, concurrency=1,
+                       primary_ids=("zh_shyuntu_tickets", "zh_tianhe_contracts"), control_ids=())
+    # 2 primaries x 4 configs x 1 repeat = 8; no controls
+    assert rep["n_primary"] == 8 and rep["n_control"] == 0
+    assert rep["selected_primaries"] == ["zh_shyuntu_tickets", "zh_tianhe_contracts"]
+    assert rep["selected_controls"] == []
+    assert {r["case"] for r in rep["records"]} == {"zh_shyuntu_tickets", "zh_tianhe_contracts"}
+
+
+def test_build_report_rejects_unknown_case_id(tmp_path):
+    import pytest
+    db, tables = _setup(tmp_path)
+    with pytest.raises(KeyError):
+        build_report(db, tables, load_value_linking(), PlanningFakeModel("SELECT 1"),
+                     FakeValueBackend(), model_name="fake", repeats=1, concurrency=1,
+                     primary_ids=("does_not_exist",), control_ids=())
+
+
 def test_control_deterministic_safety_helper(tmp_path):
     db, tables = _setup(tmp_path)
     controls = [c for c in load_value_linking() if c.id in _SELECTED_CONTROL_IDS]
