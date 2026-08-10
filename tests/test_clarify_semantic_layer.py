@@ -11,6 +11,14 @@ class StubMetricRegistry:
     def format(self, metrics):
         return format_metrics(metrics)
 
+    @property
+    def metrics(self):
+        return self.retrieve()
+
+    def retrieve_matches(self, *a, **k):
+        from agent.semantic_layer import MetricRetrievalHit
+        return [MetricRetrievalHit(m, "alias", 1.0) for m in self.retrieve(*a, **k)]
+
 
 def _active_registry():
     return StubMetricRegistry()

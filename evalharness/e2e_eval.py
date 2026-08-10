@@ -10,11 +10,15 @@ of records into the roadmap's Step-1 report shape.
 """
 from __future__ import annotations
 
+import json
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from agent.execution import run_query
 from agent.graph import run_agent
+from agent.retrieval.contracts import RetrievalConfig
+from agent.retrieval.serde import serialize_config
 from evalharness.oracle import execution_match
 
 
@@ -24,7 +28,9 @@ class EvalRecord:
     category: str
     question: str
     semantic_layer: bool
-    retrieval_config: str
+    retrieval_config: dict            # serialize_config(config) -- full canonical, NOT just a name
+    retrieval_k: int                  # runtime k (RetrievalConfig does not carry run_agent's k)
+    repeat_index: int
     predicted_sql: str
     gold_sql: str
     exec_match: bool
@@ -37,6 +43,10 @@ class EvalRecord:
     retrieved_tables: list[str] = field(default_factory=list)
     gold_tables: list[str] | None = None
     failure_stage: str | None = None
+    candidate_recall: float | None = None
+    selection_recall: float | None = None
+    context_recall: float | None = None
+    retrieval_stage_events: list[dict] = field(default_factory=list)
 
 
 def _first_try_valid(trace: list[dict]) -> bool:
@@ -63,13 +73,37 @@ def _failure_stage(result, exec_match: bool) -> str | None:
     return "answer_mismatch"
 
 
-def record_run(case, result, gold_rows, *, semantic_layer: bool,
-               retrieval_config: str = "lexical") -> EvalRecord:
+def three_layer_recall(retrieval_result, gold_tables, *, case_id: str) -> dict:
+    """|gold_set ∩ stage_set| / |gold_set| for candidates / selection anchors / context tables.
+    gold is mandatory -- an empty/None gold raises (recording 0 or a fake perfect score would be a
+    silent lie)."""
+    if not gold_tables:
+        raise ValueError(f"{case_id}: required_tables is mandatory for recall (got empty/None)")
+    gold = set(gold_tables)
+    def recall(stage):                                  # set() -> duplicate table names can't change it
+        return len(gold & set(stage)) / len(gold)
+    return {
+        "candidate_recall": recall(c.table for c in retrieval_result.candidates),
+        "selection_recall": recall(retrieval_result.selection.anchor_tables),
+        "context_recall": recall(retrieval_result.relation_plan.context_tables),
+    }
+
+
+def record_run(case, result, gold_rows, *, semantic_layer: bool, config: RetrievalConfig, k: int,
+               repeat_index: int) -> EvalRecord:
+    rr = result.retrieval_result
+    if rr is None:
+        raise ValueError(f"{case.id}: result.retrieval_result is missing (harness/graph wiring bug)")
+    if rr.config_name != config.name:
+        raise ValueError(f"{case.id}: retrieval_result.config_name={rr.config_name!r} != "
+                         f"config.name={config.name!r} (config wiring bug)")
+    recall = three_layer_recall(rr, case.required_tables, case_id=case.id)
     match = execution_match(result.execution.rows, gold_rows, ordered=False)
     usage = result.usage or {}
     return EvalRecord(
         id=case.id, category=case.category, question=case.question,
-        semantic_layer=semantic_layer, retrieval_config=retrieval_config,
+        semantic_layer=semantic_layer, retrieval_config=serialize_config(config),
+        retrieval_k=k, repeat_index=repeat_index,
         predicted_sql=result.sql, gold_sql=case.gold_sql, exec_match=match,
         sql_valid_first_try=_first_try_valid(result.trace),
         sql_valid_final=result.execution.ok,
@@ -80,19 +114,23 @@ def record_run(case, result, gold_rows, *, semantic_layer: bool,
         retrieved_tables=list(result.retrieved_tables),
         gold_tables=list(case.required_tables),
         failure_stage=_failure_stage(result, match),
+        candidate_recall=recall["candidate_recall"],
+        selection_recall=recall["selection_recall"],
+        context_recall=recall["context_recall"],
+        retrieval_stage_events=[dict(vars(e)) for e in rr.stage_events],
     )
 
 
-def run_case(db_path, tables, case, model, *, semantic_layer: bool,
-             retrieval_config: str = "lexical") -> EvalRecord:
+def run_case(db_path, tables, case, model, *, semantic_layer: bool, config: RetrievalConfig, k: int,
+             repeat_index: int) -> EvalRecord:
     """Execute the gold SQL (fixture self-check), run the full agent, score one record."""
     gold = run_query(db_path, case.gold_sql, tables=tables)
     if not gold.ok:
         raise RuntimeError(f"{case.id}: gold_sql failed to execute: {gold.error}")
     result = run_agent(db_path, case.question, model=model, tables=tables,
-                       semantic_layer=semantic_layer)
-    return record_run(case, result, gold.rows, semantic_layer=semantic_layer,
-                      retrieval_config=retrieval_config)
+                       semantic_layer=semantic_layer, k=k, retrieval_config=config)
+    return record_run(case, result, gold.rows, semantic_layer=semantic_layer, config=config,
+                      k=k, repeat_index=repeat_index)
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -117,12 +155,18 @@ def summarize(records: list[EvalRecord]) -> dict:
         return {"on": _rate([r.exec_match for r in rows if r.semantic_layer]),
                 "off": _rate([r.exec_match for r in rows if not r.semantic_layer])}
 
-    # A control "diverges" if any (id) run disagrees on exec_match between ON and OFF --
-    # the semantic layer changed an answer it should have left alone.
+    # A control "diverges" if its ON/OFF pair -- same id, repeat, canonical config, and k --
+    # disagrees on exec_match. Pairing (not any-vs-any) keeps run-to-run model randomness
+    # across repeats from masquerading as a semantic-layer regression.
+    def _pair_key(r):
+        return (r.id, r.repeat_index, json.dumps(r.retrieval_config, sort_keys=True), r.retrieval_k)
+
+    by_pair: dict[tuple, dict[bool, EvalRecord]] = defaultdict(dict)
+    for r in controls:
+        by_pair[_pair_key(r)][r.semantic_layer] = r
     diverging = sorted({
-        r.id for r in controls
-        if any(o.id == r.id and o.semantic_layer != r.semantic_layer
-               and o.exec_match != r.exec_match for o in controls)
+        pair[True].id for pair in by_pair.values()
+        if True in pair and False in pair and pair[True].exec_match != pair[False].exec_match
     })
 
     lat = [r.latency_ms for r in records]

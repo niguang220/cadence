@@ -162,3 +162,35 @@ def test_format_answer_count_is_consistent_with_preview():
     rows = [(i,) for i in range(6)]
     out = _format_answer(ExecutionResult(True, columns=["x"], rows=rows))
     assert "showing 5 of 6" in out
+
+
+# --- Fix 3: answer_question forwards retrieval_config through to the graph ---
+
+import agent.hybrid_retriever as hr
+import pytest
+
+
+class _ZeroIndex:
+    def __init__(self, tables): pass
+    def table_scores(self, q): return {}
+
+
+@pytest.fixture
+def det_index(monkeypatch):
+    monkeypatch.setattr(hr, "SemanticIndex", _ZeroIndex)
+    hr._INDEX_CACHE.clear()
+    yield
+    hr._INDEX_CACHE.clear()
+
+
+def test_answer_question_forwards_retrieval_config(det_index, tmp_path):
+    from agent.pipeline import answer_question
+    from agent.retrieval.contracts import RetrievalConfig
+    from conftest import PlanningFakeModel
+    from agent.db.build_demo_db import build
+    probe = RetrievalConfig(name="checkpoint_probe", lexical=True, dense_backend="memory",
+                            value_backend=None, selector=None, fusion="legacy_minmax",
+                            relation_strategy="legacy_one_hop")
+    res = answer_question(build(tmp_path / "t.db"), "how many tracks are in each genre",
+                          model=PlanningFakeModel("SELECT COUNT(*) FROM track"), retrieval_config=probe)
+    assert res.retrieval_result is not None and res.retrieval_result.config_name == "checkpoint_probe"

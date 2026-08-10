@@ -153,10 +153,10 @@ def expand_with_fk_neighbors(tables: list[Table], requested: list[str]) -> set[s
     parent tables a requested table references, AND child tables that reference a
     requested one (e.g. ``invoice`` also pulls in ``customer`` and ``invoice_line``).
 
-    This is exactly the table set ``render_schema`` shows with
-    ``include_fk_neighbors=True``; exposed separately so callers — e.g. the
-    retrieval-recall metric — can ask "which tables would actually reach the
-    prompt" without parsing the rendered text.
+    Callers that want the prompt to show FK neighbours call this first and pass
+    the closed set to ``render_schema``'s ``only``; exposed separately so other
+    callers — e.g. the retrieval-recall metric — can ask "which tables would
+    actually reach the prompt" without parsing the rendered text.
     """
     requested_set = set(requested)
     names = set(requested_set)
@@ -168,26 +168,14 @@ def expand_with_fk_neighbors(tables: list[Table], requested: list[str]) -> set[s
     return names
 
 
-def render_schema(
-    tables: list[Table],
-    only: list[str] | None = None,
-    include_fk_neighbors: bool = False,
-) -> str:
-    """Render tables for the prompt.
-
-    If ``only`` is given, render just those (used by the schema retriever to pass
-    top-k tables instead of the whole DB). With ``include_fk_neighbors``, also
-    render the one-hop FK neighbours in BOTH directions — parent tables this one
-    references AND child tables that reference it (e.g. picking ``invoice`` also
-    brings in ``customer`` and ``invoice_line``) — so the model never sees a
-    foreign key into a table whose columns are missing (which invites hallucination).
-    """
+def render_schema(tables: list[Table], only: list[str] | None = None) -> str:
+    """Render tables for the prompt. Pure: renders exactly ``tables`` (or exactly the
+    subset named in ``only``) and never expands the set. Callers that want FK neighbours
+    call ``expand_with_fk_neighbors`` first and pass the closed set as ``only`` — so the
+    rendered set always equals the set the caller computed (no hidden expansion)."""
     if only is None:
         selected = list(tables)
     else:
-        if include_fk_neighbors:
-            names = expand_with_fk_neighbors(tables, only)
-        else:
-            names = set(only)
+        names = set(only)
         selected = [t for t in tables if t.name in names]
     return "\n\n".join(render_table(t) for t in selected)

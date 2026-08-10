@@ -159,6 +159,14 @@ def test_governed_metric_block_survives_enhancement(tmp_path, monkeypatch):
         def format(self, metrics):
             return format_metrics(metrics)
 
+        @property
+        def metrics(self):
+            return self.retrieve()
+
+        def retrieve_matches(self, *a, **k):
+            from agent.semantic_layer import MetricRetrievalHit
+            return [MetricRetrievalHit(m, "alias", 1.0) for m in self.retrieve(*a, **k)]
+
     monkeypatch.setattr(graphmod, "_metric_registry", lambda: _StubReg())
     db = str(build(tmp_path / "saas.db"))
     model = PlanningFakeModel("SELECT 1")

@@ -37,6 +37,6 @@ def build_get_schema_tool(tables: list[Table], requested: list[str]):
         if unknown:
             return (f"Unknown table(s): {', '.join(unknown)}. "
                     f"Available tables: {', '.join(sorted(known))}.")
-        return render_schema(tables, only=table_names, include_fk_neighbors=False)
+        return render_schema(tables, only=table_names)
 
     return get_schema

@@ -34,6 +34,9 @@ class AgentState(TypedDict, total=False):
     join_paths: list[dict]           # table_relation's deterministic FK-edge hints among retrieved_tables
     feasibility_reason: str          # feasibility_assessment's refusal reason_code (e.g. no_recalled_tables)
     semantic_metrics: list[dict[str, Any]]  # serializable governed metrics bound in preflight
+    semantic_metric_hits: list[dict[str, Any]]   # preflight-bound typed metric hits (serialized), consumed by retrieval pipeline
+    retrieval_config_serialized: dict[str, Any]   # injected RetrievalConfig as a plain dict
+    retrieval_result_serialized: dict[str, Any]   # RetrievalResult from schema recall, as a plain dict
     clarification_options: list[dict[str, Any]]
     clarification_response: str
     normalized_clarification: str
