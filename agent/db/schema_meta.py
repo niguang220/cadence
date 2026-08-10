@@ -68,4 +68,16 @@ COLUMN_POLICIES: dict[str, dict[str, str]] = {
     "user": {                # SaaS schema: individual login emails are PII
         "email": "pii",
     },
+    # Stage 2 value-linking fixture (build_value_db). Explicit searchable allowlist for
+    # high-cardinality business identifiers; individual contact/rep data is PII (never indexed).
+    "company": {"company_name": "searchable"},
+    "catalog": {"name": "searchable", "sku": "searchable"},
+    "agreement": {"external_id": "searchable"},
+    "deal": {"name": "searchable"},
+    "campaign": {"name": "searchable"},
+    "vendor": {"name": "searchable"},
+    "plan_tier": {"name": "searchable"},
+    "shipment": {"tracking_no": "searchable"},
+    "person": {"full_name": "pii", "email": "pii", "phone": "pii"},
+    "sales_rep": {"full_name": "pii", "email": "pii"},
 }
