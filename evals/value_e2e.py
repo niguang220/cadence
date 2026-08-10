@@ -108,8 +108,8 @@ def run_value_e2e(db, tables, positives, negatives, model, value_backend, *,
 
 def build_report(db, tables, cases, model, value_backend, *, model_name: str,
                  repeats: int = 5, concurrency: int = 4) -> dict:
-    positives = [c for c in cases if c.expect_value_hit]
-    negatives = [c for c in cases if not c.expect_value_hit]
+    positives = [c for c in cases if c.role == "primary"]     # gold-scored (diagnostic/safety excluded)
+    negatives = [c for c in cases if c.role == "negative"]     # deterministic safety acceptance
     out = run_value_e2e(db, tables, positives, negatives, model, value_backend,
                         repeats=repeats, concurrency=concurrency)
     return {"measured": True, "kind": "value_full_agent_e2e", "model": model_name,
