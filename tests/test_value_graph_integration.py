@@ -27,8 +27,8 @@ def test_graph_routes_value_hits_via_injected_backend(monkeypatch):
     b.ensure_index()
     b.upsert([ValueDoc("d1", "product", "name", "Widget")])
     monkeypatch.setattr(graph, "run_retrieval",
-                        lambda q, t, c, *, k, metric_hits=None: _real_run_retrieval(
-                            q, t, c, k=k, metric_hits=metric_hits, value_backend=b))
+                        lambda q, t, c, *, k, metric_hits=None, value_backend=None:
+                        _real_run_retrieval(q, t, c, k=k, metric_hits=metric_hits, value_backend=b))
     state = {"question": "do we sell Widget", "tables": _vtables(), "k": 5,
              "retrieval_config_serialized": serialize_config(RetrievalConfig.value_ablation())}
     s = graph._schema_recall(state)

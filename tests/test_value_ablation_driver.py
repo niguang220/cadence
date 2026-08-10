@@ -1,5 +1,7 @@
 """Value-linking ablation driver: runs the golden through 4 configs (lexical / value / dense /
 dense+value) and records rank-sensitive metrics. Deterministic (FakeValueBackend, no LLM/ES)."""
+import json
+
 from agent.db.build_value_db import build
 from agent.db.introspect import introspect
 from evalharness.golden import load_value_linking
@@ -38,3 +40,11 @@ def test_negatives_never_produce_a_value_hit(tmp_path):
     for r in recs:
         if r["config"] in ("value_ablation", "dense_value"):
             assert r["value_hit"] is False, f"{r['config']}/{r['case']} unexpected value hit"
+
+
+def test_records_do_not_leak_raw_matched_values(tmp_path):
+    # eval records store tables / tiers / ranks — never the raw canonical values (data minimization)
+    tables, db = _setup(tmp_path)
+    blob = json.dumps(run_value_ablation(tables, db, load_value_linking()), ensure_ascii=False)
+    for raw in ("Globex Corporation", "北京数据科技有限公司", "Acme Widget", "CT-2025-0042"):
+        assert raw not in blob

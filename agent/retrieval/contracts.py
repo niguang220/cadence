@@ -74,6 +74,7 @@ class RetrievalSignal:
     raw_score: float                      # only comparable WITHIN its own channel
     match_type: str
     document_id: str | None = None
+    matched_value: str | None = None      # canonical DB value; ONLY set for a searchable value hit
 
 
 @dataclass

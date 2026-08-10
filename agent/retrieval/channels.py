@@ -49,8 +49,10 @@ class ValueChannel:
             return []
         out: list[RetrievalSignal] = []
         for hit in self._backend.search(question, allowed=allowed):
+            # matched_value is set ONLY here (searchable value hits): search is restricted to the
+            # searchable allowlist, so a pii/public column can never carry a canonical value forward.
             out.append(RetrievalSignal(
                 channel="value", target_type="value", table=hit.table, column=hit.column,
                 query_term=question, raw_score=float(hit.score), match_type=hit.match_type,
-                document_id=hit.document_id))
+                document_id=hit.document_id, matched_value=hit.value))
         return out

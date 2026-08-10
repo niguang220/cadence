@@ -26,18 +26,22 @@ def answer_question(
     threshold: float = 0.5,
     clarify: bool = True,
     retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+    value_backend=None,
 ) -> AnswerResult:
     """Answer a question by running the agent graph. Pass ``model`` to inject a
     fake in tests (real use defaults to DeepSeek, needs DEEPSEEK_API_KEY); pass
     ``tables`` to reuse a cached introspection instead of re-reading the schema.
     Pass ``clarify=False`` to bypass clarify_check entirely (used in the ablation
-    eval to hold clarification constant across OFF and ON conditions)."""
+    eval to hold clarification constant across OFF and ON conditions). ``value_backend``
+    injects a value-search backend for value retrieval configs (protocol only; the graph
+    never imports a concrete ES backend)."""
     from agent.graph import run_agent  # local import avoids a circular import
 
     model = model or create_sql_model()
     return run_agent(db_path, question, model=model, k=k, tables=tables,
                      semantic_layer=semantic_layer, threshold=threshold,
-                     clarify=clarify, retrieval_config=retrieval_config)
+                     clarify=clarify, retrieval_config=retrieval_config,
+                     value_backend=value_backend)
 
 
 def start_question_session(
@@ -51,11 +55,13 @@ def start_question_session(
     threshold: float = 0.5,
     thread_id: str | None = None,
     retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+    value_backend=None,
 ) -> tuple[str, AnswerResult | dict]:
     """Start a LangGraph HITL-capable run.
 
     Returns ``(thread_id, value)``. ``value`` is either an ``AnswerResult`` or an
-    interrupt payload containing ``question`` and ``clarification``.
+    interrupt payload containing ``question`` and ``clarification``. ``value_backend`` is held in
+    the thread runtime registry (never checkpointed) for the life of the session.
     """
     from agent.graph import start_agent_session
 
@@ -63,7 +69,7 @@ def start_question_session(
     return start_agent_session(
         db_path, question, model=model, k=k, tables=tables,
         semantic_layer=semantic_layer, threshold=threshold, thread_id=thread_id,
-        retrieval_config=retrieval_config)
+        retrieval_config=retrieval_config, value_backend=value_backend)
 
 
 def resume_question_session(thread_id: str, response) -> tuple[str, AnswerResult | dict]:
