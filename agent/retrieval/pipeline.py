@@ -10,7 +10,7 @@ from __future__ import annotations
 from agent.db.introspect import Table
 from agent.retrieval.aggregate import aggregate
 from agent.retrieval.backends import DenseBackendError, InMemoryDenseBackend
-from agent.retrieval.channels import DenseChannel, LexicalChannel
+from agent.retrieval.channels import DenseChannel, LexicalChannel, ValueChannel
 from agent.retrieval.contracts import (RelationPlan, RetrievalConfig, RetrievalResult,
                                         RetrievalStageEvent, SelectionDecision,
                                         UnsupportedRetrievalCapability)
@@ -18,13 +18,16 @@ from agent.retrieval.fusion import legacy_candidates, weighted_rrf
 from agent.retrieval.metric_match import MetricMatchProvider
 from agent.retrieval.relation import legacy_one_hop_plan, plan_relations
 from agent.retrieval.selector import NoOpSelector, TopKSelector, protected_anchors
+from agent.retrieval.value_backend import ValueBackendError
+
+_HIGH_CONFIDENCE_VALUE = {"exact_keyword", "exact_phrase"}
 
 
 def _missing_capabilities(config: RetrievalConfig) -> list[str]:
-    """Collect every unbuilt capability the config requests (never stop at the first one)."""
+    """Collect every unbuilt capability the config requests (never stop at the first one).
+    ``value_backend == "es"`` is now built (an ES failure degrades at runtime, it is not an
+    unsupported capability)."""
     missing = []
-    if config.value_backend == "es":
-        missing.append("es")
     if config.dense_backend == "qdrant":
         missing.append("qdrant")
     if config.selector == "llm":
@@ -32,8 +35,18 @@ def _missing_capabilities(config: RetrievalConfig) -> list[str]:
     return missing
 
 
+def _value_backend_for(config: RetrievalConfig, injected):
+    """Resolve the value backend the pipeline should use. An injected backend (tests / a caller
+    that already built one) wins. Otherwise a real ES backend would be constructed here — until it
+    is wired, an 'es' config without an injected backend degrades (typed), never silently empty.
+    The graph never reaches this: it passes no backend and stays ES-blind."""
+    if injected is not None:
+        return injected
+    raise ValueBackendError("no value backend available (elasticsearch backend not wired yet)")
+
+
 def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *, k: int,
-                  metric_hits=None, dense_backend=None) -> RetrievalResult:
+                  metric_hits=None, dense_backend=None, value_backend=None) -> RetrievalResult:
     metric_hits = metric_hits or []
     missing = _missing_capabilities(config)
     if missing:
@@ -49,7 +62,7 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
         signals, events = [], []
     else:
         candidates, selection, signals, events, rejected = _rrf_fusion(
-            question, tables, config, matches, dense_backend)
+            question, tables, config, matches, dense_backend, value_backend)
         if rejected:
             return RetrievalResult(config_name=config.name, signals=signals, candidates=[],
                                    metric_matches=matches, selection=selection,
@@ -76,7 +89,7 @@ def _closure(config, tables, anchors, events):
     return plan
 
 
-def _rrf_fusion(question, tables, config, matches, dense_backend):
+def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=None):
     """Channels + aggregate + admission gate + weighted_rrf + protected anchors + selector.
     NO relation planning here (that's ``_closure``). Returns
     ``(candidates, selection, signals, events, rejected)``; on admission rejection ``rejected``
@@ -102,12 +115,27 @@ def _rrf_fusion(question, tables, config, matches, dense_backend):
             events.append(RetrievalStageEvent(stage="channel", event="dense_degraded",
                                               detail={"error": str(e)}))
 
-    # Admission gate (G2): dense similarity alone can't admit an off-topic question.
+    value_signals = []
+    if config.value_backend == "es":
+        try:
+            vb = _value_backend_for(config, value_backend)
+            value_signals = ValueChannel(vb).signals(question, tables)
+            signals += value_signals
+            if value_signals:
+                channel_results["value"] = aggregate("value", value_signals)
+        except ValueBackendError as e:
+            events.append(RetrievalStageEvent(stage="channel", event="value_degraded",
+                                              detail={"error": str(e)}))
+
+    # Admission gate (G2): dense similarity alone can't admit an off-topic question. A
+    # high-confidence (exact) value hit CAN admit; token/fuzzy value hits cannot admit alone.
     has_lexical = bool(channel_results.get("lexical"))
     has_exact_metric = any(m.match_type == "alias" for m in matches)
-    if not (has_lexical or has_exact_metric):
+    has_high_conf_value = any(s.match_type in _HIGH_CONFIDENCE_VALUE for s in value_signals)
+    if not (has_lexical or has_exact_metric or has_high_conf_value):
         events.append(RetrievalStageEvent(stage="admission", event="admission_rejected",
-                                          detail={"reason": "no lexical or exact-metric footing"}))
+                                          detail={"reason": "no lexical, exact-metric, or "
+                                                            "high-confidence value footing"}))
         return [], SelectionDecision([], [], "topk", {}), signals, events, True
 
     candidates = weighted_rrf(channel_results, rrf_constant=config.rrf_constant,

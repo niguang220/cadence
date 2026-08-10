@@ -32,9 +32,17 @@ def _mrr_hit():
 
 
 def test_collects_all_missing_capabilities(tmp_path):
+    # es is now built (value backend); full_rag's only unbuilt capability is the llm selector.
     with pytest.raises(UnsupportedRetrievalCapability) as ei:
         run_retrieval("q", _tables(tmp_path), RetrievalConfig.full_rag(), k=5)
-    assert set(ei.value.capabilities) == {"es", "llm"}          # not stopped after "es"
+    assert set(ei.value.capabilities) == {"llm"}
+    # collect-ALL (don't stop at the first) still holds for a config with two unbuilt capabilities
+    cfg = RetrievalConfig(name="qdrant_llm", lexical=True, dense_backend="qdrant",
+                          value_backend=None, selector="llm", fusion="rrf",
+                          relation_strategy="shortest_path")
+    with pytest.raises(UnsupportedRetrievalCapability) as ei2:
+        run_retrieval("q", _tables(tmp_path), cfg, k=5)
+    assert set(ei2.value.capabilities) == {"qdrant", "llm"}
 
 
 def test_admission_rejects_offtopic_dense_only(tmp_path):

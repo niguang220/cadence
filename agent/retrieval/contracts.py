@@ -50,6 +50,14 @@ class RetrievalConfig:
                    relation_strategy="shortest_path")
 
     @classmethod
+    def dense_value(cls) -> "RetrievalConfig":
+        """Factorial cell: lexical + dense + value (no LLM selector). The dense+value corner of the
+        Stage 2 ablation over {dense off/on} x {value off/on}, with lexical as the admission floor."""
+        return cls(name="dense_value", lexical=True, dense_backend="memory",
+                   value_backend="es", selector=None, fusion="rrf",
+                   relation_strategy="shortest_path")
+
+    @classmethod
     def full_rag(cls) -> "RetrievalConfig":
         return cls(name="full_rag", lexical=True, dense_backend="memory",
                    value_backend="es", selector="llm", fusion="rrf",
