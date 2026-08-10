@@ -24,6 +24,14 @@ dev = [
 demo = [
     "streamlit",
 ]
+es = [
+    "elasticsearch>=8,<9",
+]
 
 [tool.setuptools.packages.find]
 include = ["agent*", "evalharness*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "es_integration: real Elasticsearch integration test (opt-in; needs CADENCE_ES_URL + the es extra). Skipped by default; run via the es-integration CI job or a local Docker ES.",
+]
