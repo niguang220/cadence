@@ -89,10 +89,42 @@ def three_layer_recall(retrieval_result, gold_tables, *, case_id: str) -> dict:
     }
 
 
+def _clarified_record(case, result, *, semantic_layer: bool, config: RetrievalConfig, k: int,
+                      repeat_index: int) -> EvalRecord:
+    """A legitimately clarified run has no retrieval_result -- clarify_check precedes retrieval,
+    so it returns before any channel runs. Record it as ``failure_stage="clarified"`` with
+    exec_match=False and the three recalls left None: retrieval never ran, and scoring an un-run
+    stage as 0 would be a silent lie. Real provenance (config / k / repeat / gold) is preserved."""
+    usage = result.usage or {}
+    return EvalRecord(
+        id=case.id, category=case.category, question=case.question,
+        semantic_layer=semantic_layer, retrieval_config=serialize_config(config),
+        retrieval_k=k, repeat_index=repeat_index,
+        predicted_sql=result.sql, gold_sql=case.gold_sql, exec_match=False,
+        sql_valid_first_try=_first_try_valid(result.trace),
+        sql_valid_final=result.execution.ok,
+        repair_attempts=_repair_attempts(result.trace),
+        latency_ms=float(usage.get("latency_ms", 0.0)),
+        prompt_tokens=int(usage.get("input_tokens", 0)),
+        completion_tokens=int(usage.get("output_tokens", 0)),
+        retrieved_tables=list(result.retrieved_tables),
+        gold_tables=list(case.required_tables),
+        failure_stage="clarified",
+        candidate_recall=None, selection_recall=None, context_recall=None,
+        retrieval_stage_events=[],
+    )
+
+
 def record_run(case, result, gold_rows, *, semantic_layer: bool, config: RetrievalConfig, k: int,
                repeat_index: int) -> EvalRecord:
     rr = result.retrieval_result
     if rr is None:
+        # Clarify precedes retrieval, so a legitimately clarified run has rr=None WITH a
+        # clarification -- record it (see _clarified_record). Only rr=None WITHOUT a clarification
+        # is a real graph/harness wiring bug.
+        if result.clarification is not None:
+            return _clarified_record(case, result, semantic_layer=semantic_layer, config=config,
+                                     k=k, repeat_index=repeat_index)
         raise ValueError(f"{case.id}: result.retrieval_result is missing (harness/graph wiring bug)")
     if rr.config_name != config.name:
         raise ValueError(f"{case.id}: retrieval_result.config_name={rr.config_name!r} != "

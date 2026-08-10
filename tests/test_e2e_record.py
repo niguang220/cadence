@@ -88,6 +88,26 @@ def test_record_run_fails_if_retrieval_result_missing():
                    config=RetrievalConfig.current_hybrid(), k=5, repeat_index=0)
 
 
+def test_clarified_run_without_retrieval_result_is_recorded_not_raised():
+    # Real clarify path: clarify_check precedes retrieval, so a legitimately clarified run has
+    # retrieval_result=None WITH a clarification. Record it as "clarified" (not a wiring bug),
+    # and never fake the un-run retrieval recall as 0.
+    a = _answer([], sql="", ok=False, clarification="which metric do you mean?")
+    a.retrieval_result = None
+    r = record_run(_case(), a, [(42,)], semantic_layer=True,
+                   config=RetrievalConfig.rrf_hybrid(), k=7, repeat_index=2)
+    assert r.failure_stage == "clarified"
+    assert r.exec_match is False
+    assert r.candidate_recall is None
+    assert r.selection_recall is None
+    assert r.context_recall is None
+    assert r.retrieval_stage_events == []
+    # real provenance preserved (config / k / repeat / gold), NOT the un-run retrieval
+    assert r.retrieval_config == serialize_config(RetrievalConfig.rrf_hybrid())
+    assert r.retrieval_k == 7 and r.repeat_index == 2
+    assert r.gold_tables == ["subscription"]
+
+
 def test_record_run_fails_on_config_name_mismatch():
     a = _answer([(42,)])   # retrieval_result config_name defaults to "current_hybrid"
     with pytest.raises(ValueError, match="config_name"):
