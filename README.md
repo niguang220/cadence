@@ -10,10 +10,11 @@ deterministic guardrails you can audit, a pipeline that refuses (with a reason) 
 guessing, and a self-built harness that measures how reliable selected parts are — including
 where they aren't.
 
-Architecture informed by studying Alibaba's `spring-ai-alibaba/DataAgent` (no code copied).
-Cadence builds on a DB-agnostic core ported from my earlier DataPilot project; its
-planner-driven orchestration, Docker sandbox, and current reliability surfaces were developed
-here. Implemented in Python / LangGraph.
+Cadence continues my earlier **DataPilot** project and reuses its DB-agnostic core; the
+planner-driven orchestration, the retrieval pipeline, the Docker sandbox, and every
+reliability surface described below were built here. The planner/gate topology draws on ideas
+from reading Alibaba's `spring-ai-alibaba/DataAgent` — chiefly the separation of schema recall
+from feasibility gating. Python / LangGraph.
 
 ---
 
@@ -129,6 +130,56 @@ conditions, fixture hash, sample size, and conclusions are recorded in
 **Building a mechanism that can veto your own plausible ideas is closer to real reliability
 engineering than adding another node.**
 
+## Measured: a full-agent E2E with failure attribution
+
+The harness above measures components. This one measures the whole agent, against real
+infrastructure, and attributes each failure to a stage.
+
+A rank-sensitive value-linking golden was frozen before running — spec SHA
+`f9c4d8cb140a4b109b2a388798d117a0fa9cb983fa126c78d5333df65a9a1ebb`, covering case id,
+question, gold SQL and required tables, so the golden cannot silently drift under the
+numbers. 10 primaries × 4 retrieval configs × 5 repeats, plus 4 controls = **280 records**
+against **real Elasticsearch 8.19 and real DeepSeek**.
+
+**Read the numbers with the fixture in mind.** The set was deliberately built to be
+*non-saturated* — cases where neither lexical nor dense retrieval has a bridge to the answer.
+It measures the value channel's marginal contribution on its hardest ground. It is not an
+overall accuracy score, and a number like 60% means something entirely different here than it
+would on a benchmark chosen to be representative.
+
+| config | exec_match | candidate recall | Fusion@5 |
+| --- | --- | --- | --- |
+| lexical | 28% | 0.20 | 0.20 |
+| dense (rrf) | 24% | 0.40 | 0.30 |
+| lexical + value | 48% | 0.60 | 0.60 |
+| dense + value | **60%** | **0.80** | **0.75** |
+
+What the harness separated — which is the actual point:
+
+- **Value converts retrieval misses into execution wins** in three categories, including one
+  combo-only case: value alone 0/5, dense alone 0/5, the two together 5/5.
+- **Two Chinese cases returned an empty candidate set in that run — root cause unknown.**
+  `zh_shyuntu_tickets` and `zh_tianhe_contracts` sat at candidate recall 0.00 under every
+  config, so the agent refused rather than guessed. A follow-up stood up real Elasticsearch
+  8.19 and **disproved** the first hypothesis (a "CJK tokenisation gap"): on fresh, rebuilt,
+  and reused indexes real ES tokenises those names and returns `exact_keyword` hits identical
+  to `FakeValueBackend`. What the investigation *did* confirm is a real defect —
+  `ElasticsearchValueBackend` never checked the `_bulk` response's per-item `errors`, so a
+  partial ingestion failure could silently drop documents (now fixed: ingestion fails loud).
+  Whether that is what bit the historical run is not recoverable from the logs, so the
+  280-run cause stays **unknown** rather than claimed.
+- **Retrieval-fine / generation-fails** cases isolated as a generation problem (recall 1.0,
+  wrong SQL every repeat), out of scope for anything retrieval-side.
+- Controls: 80 runs, **zero PII leak**, zero silent backend fallback, and a full-blob scan of
+  the artifacts clean of raw entity values.
+
+**The recommendation this produced was to ship nothing.** The shipping preset was never in
+the comparison set, so the run cannot claim `dense+value` beats it; the exec-level lift is
+real but narrow; and the wins concentrate in exactly the niche the value channel was built
+for. The report proposes a head-to-head canary instead of a default flip, and the production
+default is unchanged.
+[Full report with per-case results, stage events, and cost](docs/reliability/2026-08-11-stage3a-value-e2e-280.md).
+
 ## Running it
 
 ```bash
@@ -189,19 +240,24 @@ of inventing a number.
 
 Next, in priority order:
 
-1. **External validity** — run the E2E path on a frozen, auditable slice of a public
-   benchmark (BIRD / Spider), instead of only the in-repo development fixtures.
-2. **A full-agent end-to-end surface with failure attribution** — the outcome a user actually
-   cares about (right answer / right refusal / no governance leak), with failures decomposed
-   across retrieval → planning → SQL → judge → sandbox.
-3. **A verifiable semantic layer** — extend the existing metric registry
+1. **A head-to-head canary against the shipping preset** — `current_hybrid + value` measured
+   against `current_hybrid` on the same frozen set. That comparison, not the one already run,
+   is what a default flip would actually require. This is the one live follow-up the E2E
+   generated: the earlier "CJK retrieval gap" lead was investigated and **disproved** (see the
+   value-E2E bullet above), and the real defect it surfaced — unchecked ES bulk errors that
+   could silently drop documents — is fixed, so no analyzer work is warranted.
+3. **External validity** — run the E2E path on a frozen, auditable slice of a public
+   benchmark (BIRD / Spider), instead of only in-repo fixtures.
+4. **A verifiable semantic layer** — extend the existing metric registry
    (`agent/semantic_layer.py`) into a declarative entity/relationship/metric contract, so an
    alias like `customer → account` comes from a manifest rather than a model's guess.
 
 ## Tech
 
 Python 3.11 · LangGraph · DeepSeek (`deepseek-chat`, factory-isolated) · sqlglot · fastembed
-(hybrid lexical + embedding retrieval) · SQLite · Docker (isolated Python sandbox) · pytest + CI.
+(hybrid lexical + embedding retrieval) · Elasticsearch 8 (opt-in value-linking channel,
+`pip install -e ".[es]"`) · SQLite · Docker (isolated Python sandbox) · pytest + CI, with an
+opt-in real-Elasticsearch integration tier.
 
 ## License
 

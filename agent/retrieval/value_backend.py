@@ -34,8 +34,33 @@ class ValueHit:
 
 
 class ValueBackendError(Exception):
-    """Value backend failed (ES unreachable / query error). The pipeline catches this and records a
-    value_degraded stage event; the channel must let it propagate."""
+    """Value backend failed (ES unreachable / query error / partial ingestion failure). The query
+    pipeline catches search-time failures and records a value_degraded stage event; ingestion
+    failures (upsert/prune) propagate out of build_value_index so the caller fails loud instead of
+    querying a silently-incomplete index."""
+
+
+def _bulk_error_summary(body: dict) -> tuple[int, int, list[int]] | None:
+    """Inspect an Elasticsearch _bulk response BODY for per-item failures. ``client.bulk`` returns
+    HTTP 200 with ``errors: true`` when some items fail; it does NOT raise. Returns
+    ``(failed, total, sorted_status_codes)`` if any item carries an ``error``, else ``None``. A
+    delete of a missing doc (404 not_found, no ``error`` key) is not a failure. The caller must not
+    put any part of the item bodies / error reasons into a raised message (they can echo values)."""
+    if not body.get("errors"):
+        return None
+    items = body.get("items", [])
+    statuses: set[int] = set()
+    failed = 0
+    for item in items:
+        result = next(iter(item.values())) if item else {}     # {op: {...}} -> the op result dict
+        if result.get("error") is not None:                    # ES sets 'error' only on real failures
+            failed += 1
+            status = result.get("status")
+            if isinstance(status, int):
+                statuses.add(status)
+    if not failed:
+        return None
+    return failed, len(items), sorted(statuses)
 
 
 class ValueBackend(Protocol):
@@ -170,28 +195,39 @@ class ElasticsearchValueBackend:
         except Exception as e:
             raise ValueBackendError(str(e)) from e
 
+    def _bulk(self, ops: list[dict], op: str) -> None:
+        """Run a refresh-blocking bulk and FAIL LOUD on either a transport error or a per-item
+        partial failure. The raised message is sanitized to op type / failed-count / HTTP statuses
+        only — never a raw value, document source, or ES error reason (those can echo the data)."""
+        try:
+            resp = self._es.bulk(operations=ops, refresh="wait_for")
+        except Exception as e:                                 # transport / request-level failure
+            raise ValueBackendError(f"bulk {op} request failed") from e
+        summary = _bulk_error_summary(getattr(resp, "body", resp))
+        if summary is not None:
+            failed, total, statuses = summary
+            raise ValueBackendError(
+                f"bulk {op} partial failure: {failed}/{total} items failed; http_status={statuses}")
+
     def upsert(self, docs: list[ValueDoc]) -> None:
         if not docs:
             return
-        ops = []
+        ops: list[dict] = []
         for d in docs:
             ops.append({"index": {"_index": self._index, "_id": d.document_id}})
             ops.append({"table": d.table, "column": d.column, "value": d.value})
-        try:
-            self._es.bulk(operations=ops, refresh="wait_for")
-        except Exception as e:
-            raise ValueBackendError(str(e)) from e
+        self._bulk(ops, "upsert")
 
     def prune(self, keep_ids: set[str]) -> None:
         try:
             res = self._es.search(index=self._index, size=10000, source=False,
                                   query={"match_all": {}})
-            stale = {h["_id"] for h in res["hits"]["hits"]} - set(keep_ids)
-            if stale:
-                ops = [{"delete": {"_index": self._index, "_id": i}} for i in stale]
-                self._es.bulk(operations=ops, refresh="wait_for")
         except Exception as e:
-            raise ValueBackendError(str(e)) from e
+            raise ValueBackendError("prune search failed") from e
+        stale = {h["_id"] for h in res["hits"]["hits"]} - set(keep_ids)
+        if stale:
+            ops = [{"delete": {"_index": self._index, "_id": i}} for i in stale]
+            self._bulk(ops, "prune")
 
     def search(self, question: str, *, allowed: list[tuple[str, str]],
                limit: int = 20) -> list[ValueHit]:
