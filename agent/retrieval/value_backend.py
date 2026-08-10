@@ -131,6 +131,87 @@ class FakeValueBackend:
             m = _classify(d.value, question)
             if m:
                 hits.append(ValueHit(d.table, d.column, d.value, m[0], m[1], d.document_id))
-        hits.sort(key=lambda h: (-_BUCKET.get(h.match_type, 0), -h.score, h.table, h.column,
-                                 h.document_id))
-        return hits[:limit]
+        return _rank(hits)[:limit]
+
+
+def _rank(hits: list[ValueHit]) -> list[ValueHit]:
+    return sorted(hits, key=lambda h: (-_BUCKET.get(h.match_type, 0), -h.score, h.table, h.column,
+                                       h.document_id))
+
+
+class ElasticsearchValueBackend:
+    """Real value backend over Elasticsearch. ES does the recall (which candidate values share
+    tokens with / are near-spellings of the question); the match TIER is then assigned by the same
+    deterministic ``_classify`` the fake uses, so the two backends agree on match_type (parity).
+
+    ``elasticsearch`` is imported lazily so this module stays importable without the extra."""
+
+    def __init__(self, client, index: str):
+        self._es = client
+        self._index = index
+
+    @classmethod
+    def from_url(cls, url: str, index: str) -> "ElasticsearchValueBackend":
+        from elasticsearch import Elasticsearch          # lazy: only when a real backend is built
+        return cls(Elasticsearch(url), index)
+
+    def ensure_index(self) -> None:
+        try:
+            if not self._es.indices.exists(index=self._index):
+                self._es.indices.create(
+                    index=self._index,
+                    settings={"analysis": {"normalizer": {
+                        "lc": {"type": "custom", "filter": ["lowercase"]}}}},
+                    mappings={"properties": {
+                        "table": {"type": "keyword"},
+                        "column": {"type": "keyword"},
+                        "value": {"type": "text",
+                                  "fields": {"raw": {"type": "keyword", "normalizer": "lc"}}}}})
+        except Exception as e:
+            raise ValueBackendError(str(e)) from e
+
+    def upsert(self, docs: list[ValueDoc]) -> None:
+        if not docs:
+            return
+        ops = []
+        for d in docs:
+            ops.append({"index": {"_index": self._index, "_id": d.document_id}})
+            ops.append({"table": d.table, "column": d.column, "value": d.value})
+        try:
+            self._es.bulk(operations=ops, refresh="wait_for")
+        except Exception as e:
+            raise ValueBackendError(str(e)) from e
+
+    def prune(self, keep_ids: set[str]) -> None:
+        try:
+            res = self._es.search(index=self._index, size=10000, source=False,
+                                  query={"match_all": {}})
+            stale = {h["_id"] for h in res["hits"]["hits"]} - set(keep_ids)
+            if stale:
+                ops = [{"delete": {"_index": self._index, "_id": i}} for i in stale]
+                self._es.bulk(operations=ops, refresh="wait_for")
+        except Exception as e:
+            raise ValueBackendError(str(e)) from e
+
+    def search(self, question: str, *, allowed: list[tuple[str, str]],
+               limit: int = 20) -> list[ValueHit]:
+        if not allowed:
+            return []
+        pairs = [{"bool": {"must": [{"term": {"table": t}}, {"term": {"column": c}}]}}
+                 for t, c in allowed]
+        query = {"bool": {
+            "filter": [{"bool": {"should": pairs, "minimum_should_match": 1}}],   # allowlist only
+            "should": [{"match": {"value": {"query": question}}},                 # token/phrase recall
+                       {"match": {"value": {"query": question, "fuzziness": "AUTO"}}}],  # near-spell
+            "minimum_should_match": 1}}
+        try:
+            res = self._es.search(index=self._index, size=max(limit * 5, 50), query=query)
+        except Exception as e:
+            raise ValueBackendError(str(e)) from e
+        hits: list[ValueHit] = []
+        for h in res["hits"]["hits"]:
+            src = h["_source"]
+            m = _classify(src["value"], question)          # deterministic tier -> fake/ES parity
+            if m:
+                hits.append(ValueHit(src["table"], src["column"], src["value"], m[0], m[1], h["_id"]))
+        return _rank(hits)[:limit]

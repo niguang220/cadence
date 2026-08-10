@@ -6,6 +6,8 @@ the planner-driven graph the FIRST model call is the planner, so a fake that alw
 returned SQL would feed that SQL to the planner (unparseable -> empty plan -> refuse).
 A plan-aware fake keeps "first call returns SELECT ..." tests meaningful.
 """
+import os
+
 import pytest
 
 from agent.db.build_saas_db import build
@@ -14,6 +16,26 @@ from agent.db.build_saas_db import build
 @pytest.fixture
 def saas_db(tmp_path):
     return str(build(tmp_path / "saas.db"))
+
+
+@pytest.fixture
+def es_backend():
+    """Opt-in Elasticsearch backend on a throwaway index. Skips (never fails) when the ES tier is
+    not enabled, so the default no-Docker suite stays green while these tests simply do not run."""
+    url = os.environ.get("CADENCE_ES_URL")
+    if not url:
+        pytest.skip("CADENCE_ES_URL not set (opt-in es_integration tier)")
+    try:
+        import elasticsearch  # noqa: F401
+    except ImportError:
+        pytest.skip("elasticsearch client not installed (pip install -e '.[es]')")
+    from agent.retrieval.value_backend import ElasticsearchValueBackend
+    index = "cadence-values-itest"
+    backend = ElasticsearchValueBackend.from_url(url, index)
+    backend._es.indices.delete(index=index, ignore_unavailable=True)   # clean slate
+    backend.ensure_index()
+    yield backend
+    backend._es.indices.delete(index=index, ignore_unavailable=True)
 
 
 class PlanningFakeModel:
