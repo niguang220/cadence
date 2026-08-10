@@ -1,0 +1,76 @@
+name: value-e2e (real, manual)
+
+# Real, PAID full-agent value E2E (100 runs, real Elasticsearch + real DeepSeek). MANUAL ONLY and
+# MAIN ONLY, so a feature branch can never reach the real-eval environment secret. Never triggered
+# by pull_request / push / label. The DEEPSEEK_API_KEY lives in the `real-eval` GitHub Environment;
+# add a required reviewer there so every paid run needs a human approval.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One fixed group, never cancelled: a paid 100-run must not be duplicated or interrupted mid-way.
+concurrency:
+  group: value-e2e-real
+  cancel-in-progress: false
+
+jobs:
+  value-e2e:
+    # Refuse to run (and to expose the environment secret) from any ref other than main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: real-eval          # scopes DEEPSEEK_API_KEY; configure a required reviewer here
+    services:
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -s http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev,es]"
+      - name: Verify DEEPSEEK_API_KEY is present (fail-fast, never printed)
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+            echo "DEEPSEEK_API_KEY is not set in the real-eval environment; refusing to run"
+            exit 1
+          fi
+          echo "DEEPSEEK_API_KEY is present"
+      - name: Wait for Elasticsearch to be ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9200/_cluster/health | grep -q '"status"'; then
+              echo "elasticsearch ready"; exit 0
+            fi
+            echo "waiting for elasticsearch ($i)"; sleep 5
+          done
+          echo "elasticsearch did not become ready"; exit 1
+      - name: Run the real full-agent value E2E (4 configs x 5 positives x 5 repeats = 100 runs)
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          CADENCE_ES_URL: http://localhost:9200
+        run: python -m evals.value_e2e
+      - name: Upload the E2E report artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: value-e2e-report
+          path: docs/reliability/value_e2e_*.json
+          if-no-files-found: error
