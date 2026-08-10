@@ -12,6 +12,7 @@ from pathlib import Path
 from agent.db.introspect import Table
 from agent.generation import AnswerResult
 from agent.llm import create_sql_model
+from agent.retrieval.contracts import RetrievalConfig
 
 
 def answer_question(
@@ -24,6 +25,7 @@ def answer_question(
     semantic_layer: bool = False,
     threshold: float = 0.5,
     clarify: bool = True,
+    retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
 ) -> AnswerResult:
     """Answer a question by running the agent graph. Pass ``model`` to inject a
     fake in tests (real use defaults to DeepSeek, needs DEEPSEEK_API_KEY); pass
@@ -35,7 +37,7 @@ def answer_question(
     model = model or create_sql_model()
     return run_agent(db_path, question, model=model, k=k, tables=tables,
                      semantic_layer=semantic_layer, threshold=threshold,
-                     clarify=clarify)
+                     clarify=clarify, retrieval_config=retrieval_config)
 
 
 def start_question_session(
@@ -48,6 +50,7 @@ def start_question_session(
     semantic_layer: bool = False,
     threshold: float = 0.5,
     thread_id: str | None = None,
+    retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
 ) -> tuple[str, AnswerResult | dict]:
     """Start a LangGraph HITL-capable run.
 
@@ -59,7 +62,8 @@ def start_question_session(
     model = model or create_sql_model()
     return start_agent_session(
         db_path, question, model=model, k=k, tables=tables,
-        semantic_layer=semantic_layer, threshold=threshold, thread_id=thread_id)
+        semantic_layer=semantic_layer, threshold=threshold, thread_id=thread_id,
+        retrieval_config=retrieval_config)
 
 
 def resume_question_session(thread_id: str, response) -> tuple[str, AnswerResult | dict]:

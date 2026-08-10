@@ -6,8 +6,9 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 _SPEC_PATH = Path(__file__).resolve().parent / "semantic_layer_metrics.json"
 
@@ -20,6 +21,15 @@ class MetricDef:
     grain: str
     required_filters: list[str]
     common_mistake: str
+    required_tables: list[str] = field(default_factory=list)
+    required_columns: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MetricRetrievalHit:
+    metric: MetricDef
+    match_type: Literal["alias", "dense"]
+    score: float
 
 
 class MetricRegistry:
@@ -37,9 +47,11 @@ class MetricRegistry:
     def load(cls, path: str | Path = _SPEC_PATH, *, embed=None) -> "MetricRegistry":
         return cls(load_metrics(path), embed=embed)
 
+    def retrieve_matches(self, question: str, *, threshold: float = 0.5, top_k: int = 3) -> list["MetricRetrievalHit"]:
+        return _retrieve_metric_hits(question, self.metrics, threshold=threshold, top_k=top_k, embed=self._embed)
+
     def retrieve(self, question: str, *, threshold: float = 0.5, top_k: int = 3) -> list[MetricDef]:
-        return _retrieve_metrics(question, self.metrics, threshold=threshold,
-                                 top_k=top_k, embed=self._embed)
+        return [h.metric for h in self.retrieve_matches(question, threshold=threshold, top_k=top_k)]
 
     def format(self, metrics: list[MetricDef]) -> str:
         return format_metrics(metrics)
@@ -70,18 +82,19 @@ def _cos(a, b):
     return dot/(na*nb) if na and nb else 0.0
 
 def _default_embed(texts):
-    from agent.hybrid_retriever import _embed   # reuse the project's fastembed model
-    return _embed(texts)
+    from agent.retrieval.encoder import default_encoder   # route through the encoder seam
+    return default_encoder().embed(texts)
 
-def _retrieve_metrics(question, metrics, *, threshold=0.5, top_k=3, embed=None):
+def _retrieve_metric_hits(question, metrics, *, threshold=0.5, top_k=3, embed=None) -> list["MetricRetrievalHit"]:
     embed = embed or _default_embed
     q = question.lower()
-    chosen, seen = [], set()
-    # 1) alias exact -- always included (precision), not capped
+    chosen: list[MetricRetrievalHit] = []
+    seen: set[str] = set()
+    # 1) alias exact -- always included (precision), score 1.0
     for m in metrics:
         if any(re.search(rf"\b{re.escape(a.lower())}\b", q) for a in m.aliases):
             if m.name not in seen:
-                chosen.append(m); seen.add(m.name)
+                chosen.append(MetricRetrievalHit(m, "alias", 1.0)); seen.add(m.name)
     # 2) dense recall -- fill up to top_k by descending similarity, threshold-gated
     rest = [m for m in metrics if m.name not in seen]
     if rest and len(chosen) < top_k:
@@ -94,10 +107,16 @@ def _retrieve_metrics(question, metrics, *, threshold=0.5, top_k=3, embed=None):
                 if len(chosen) >= top_k:
                     break
                 if score >= threshold and m.name not in seen:
-                    chosen.append(m); seen.add(m.name)
+                    chosen.append(MetricRetrievalHit(m, "dense", float(score))); seen.add(m.name)
         except Exception:
             pass   # alias hits already collected; dense recall is best-effort
     return chosen
+
+
+def _retrieve_metrics(question, metrics, *, threshold=0.5, top_k=3, embed=None):
+    """Back-compat: return MetricDefs (delegates to the typed hit producer)."""
+    return [h.metric for h in _retrieve_metric_hits(question, metrics, threshold=threshold,
+                                                    top_k=top_k, embed=embed)]
 
 
 def retrieve_metrics(question, metrics, *, threshold=0.5, top_k=3, embed=None):

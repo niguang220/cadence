@@ -59,7 +59,6 @@ from agent.graph_state import AgentState
 from agent.generation import (AnswerResult, _extract_sql, _format_answer, _NO_QUERY,
                              generate_sql)
 from agent.governance import check_result_governance, check_sql_governance
-from agent.hybrid_retriever import retrieve
 from agent.intent import classify_intent
 from agent.observability import setup_phoenix
 from agent.plan import deserialize_plan, serialize_plan, validate_plan
@@ -68,6 +67,11 @@ from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
                            TOOL_SYSTEM_PROMPT)
 from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
+from agent.retrieval.contracts import RetrievalConfig
+from agent.retrieval.metric_match import deserialize_hits, serialize_hits, validate_all_metrics
+from agent.retrieval.pipeline import run_retrieval
+from agent.retrieval.serde import (deserialize_config, deserialize_result, serialize_config,
+                                    serialize_result)
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
 from agent.schema_relations import join_paths
 from agent.semantic_consistency import check_semantic_consistency
@@ -130,13 +134,16 @@ def _semantic_metrics(state: AgentState) -> list[MetricDef]:
 def _preflight_context(state: AgentState) -> dict:
     tables = state.get("tables") or introspect(state["db_path"])
     thresh = state.get("threshold", 0.5)
-    metrics = (
-        _metric_registry().retrieve(state["question"], threshold=thresh)
-        if state.get("semantic_layer") else []
-    )
+    hits = []
+    if state.get("semantic_layer"):
+        registry = _metric_registry()
+        validate_all_metrics(registry, tables)      # G4: validate every semantic preflight; no memo
+        hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
+    metrics = [h.metric for h in hits]
     options = build_clarification_options(state["question"], tables=tables, metrics=metrics)
     out = {
-        "semantic_metrics": _serialize_metrics(metrics),
+        "semantic_metrics": _serialize_metrics(metrics),        # unchanged: MetricDefs for prompts
+        "semantic_metric_hits": serialize_hits(hits),           # NEW: typed hits for the pipeline
         "clarification_options": options,
         "trace": [{
             "node": "preflight_context",
@@ -274,41 +281,52 @@ def _query_enhance(state: AgentState, config=None) -> dict:
     return {"enhanced_question": result.enhanced_question, "trace": [entry]}
 
 
+def _retrieval_config(state: AgentState) -> RetrievalConfig:
+    """The RetrievalConfig driving this run. ``run_agent``/``start_agent_session`` always
+    inject ``retrieval_config_serialized`` (defaulting to ``current_hybrid``), so this only
+    falls back to ``current_hybrid`` directly for a handful of unit tests that call
+    ``_schema_recall``/``_table_relation`` with a hand-built state dict."""
+    serialized = state.get("retrieval_config_serialized")
+    return deserialize_config(serialized) if serialized else RetrievalConfig.current_hybrid()
+
+
 def _schema_recall(state: AgentState) -> dict:
-    """Pure retrieval: top-k table recall. Does NOT refuse on empty recall --
-    that decision belongs to feasibility_assessment (the single deterministic
-    refusal owner), which sees this node's empty ``retrieved_tables`` and issues
-    the ``no_recalled_tables`` refusal."""
-    tables = state.get("tables")
-    if tables is None:
-        tables = introspect(state["db_path"])
-    top_k = retrieve(_retrieval_question(state), tables, k=state.get("k", 5))
-    if not top_k:
-        return {
-            "tables": tables,
-            "retrieved_tables": [],
-            "schema": "",
-            "trace": [{"node": "schema_recall", "tables": [], "retrieval_failed": True}],
-        }
-    schema = render_schema(tables, only=top_k, include_fk_neighbors=True)
-    return {
-        "tables": tables,
-        "retrieved_tables": top_k,
-        "schema": schema,
-        "trace": [{"node": "schema_recall", "tables": top_k}],
-    }
+    """Retrieval via the typed pipeline. current_hybrid (default) reproduces today's hybrid recall +
+    one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate top-k. The rendered
+    prompt set is relation_plan.context_tables (which equals it for RRF and equals the one-hop closure
+    for legacy). Empty recall -> feasibility owns the refusal, exactly as before."""
+    tables = state.get("tables") or introspect(state["db_path"])
+    config = _retrieval_config(state)
+    hits = deserialize_hits(state.get("semantic_metric_hits", []))
+    result = run_retrieval(_retrieval_question(state), tables, config,
+                           k=state.get("k", 5), metric_hits=hits)
+    if config.fusion == "legacy_minmax":
+        retrieved = [c.table for c in result.candidates]     # pre-expansion top-k (unchanged public value)
+    else:
+        retrieved = list(result.selection.anchor_tables)
+    base = {"tables": tables, "retrieved_tables": retrieved,
+            "retrieval_result_serialized": serialize_result(result)}
+    if not retrieved:
+        return {**base, "schema": "",
+                "trace": [{"node": "schema_recall", "tables": [], "retrieval_failed": True}]}
+    return {**base, "schema": render_schema(tables, only=result.relation_plan.context_tables),
+            "trace": [{"node": "schema_recall", "tables": retrieved}]}
 
 
 def _table_relation(state: AgentState) -> dict:
-    """Deterministic table-relation node: zero LLM. Computes the direct FK-edge
-    join hints among the recalled (top-k) tables and appends a short "Join paths:"
-    hint to the rendered schema -- but only when there is something to hint at, so
-    a recalled set with no direct FK edges leaves the schema byte-identical."""
-    paths = join_paths(state["tables"], state["retrieved_tables"])
-    out = {
-        "join_paths": paths,
-        "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}],
-    }
+    """Join hints, routed by the relation plan's STRATEGY (independent of fusion): legacy_one_hop ->
+    byte-identical ``join_paths`` over the recalled tables; shortest_path -> hints from
+    ``RelationPlan.edges`` only (no join_paths / no second FK expansion). Falls back to legacy
+    join_paths when no serialized result is present (old direct-call tests)."""
+    serialized = state.get("retrieval_result_serialized")
+    plan = deserialize_result(serialized).relation_plan if serialized else None
+    if plan is None or plan.strategy == "legacy_one_hop":
+        paths = join_paths(state["tables"], state["retrieved_tables"])
+    else:  # shortest_path
+        paths = [{"from": e.from_table, "on": e.from_column, "to": e.to_table, "ref_on": e.to_column}
+                 for e in plan.edges]
+    out = {"join_paths": paths,
+           "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}]}
     if paths:
         hint = "\n".join(f"{p['from']}.{p['on']} = {p['to']}.{p['ref_on']}" for p in paths)
         out["schema"] = f"{state['schema']}\n\nJoin paths:\n{hint}"
@@ -883,12 +901,15 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
         trace=final.get("trace", []),
         usage=usage.summary(),
         python_analysis=final.get("python_analysis"),
+        retrieval_result=(deserialize_result(final["retrieval_result_serialized"])
+                          if final.get("retrieval_result_serialized") else None),
     )
 
 
 def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
               tables=None, semantic_layer: bool = False,
-              threshold: float = 0.5, clarify: bool = True) -> AnswerResult:
+              threshold: float = 0.5, clarify: bool = True,
+              retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid()) -> AnswerResult:
     """Invoke the compiled graph and map the final state to an AnswerResult."""
     setup_phoenix()  # no-op unless PHOENIX_ENABLED; sends span trees to the Phoenix UI
     # a callback captures token + latency for every model call nested in the nodes,
@@ -905,6 +926,7 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
         "semantic_layer": semantic_layer,
         "threshold": threshold,
         "clarify": clarify,
+        "retrieval_config_serialized": serialize_config(retrieval_config),
         "trace": [],
     }, config=_config(callbacks=[usage]))
     return _to_answer(final, usage)
@@ -913,7 +935,9 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
 def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5,
                         tables=None, semantic_layer: bool = False,
                         threshold: float = 0.5,
-                        thread_id: str | None = None) -> tuple[str, AnswerResult | dict]:
+                        thread_id: str | None = None,
+                        retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid()
+                        ) -> tuple[str, AnswerResult | dict]:
     """Start a HITL-capable run. Returns ``(thread_id, result_or_interrupt)``.
 
     If the graph pauses for clarification, the second value is the interrupt payload:
@@ -934,6 +958,7 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
         "clarify": True,
         "hitl": True,
         "thread_id": thread_id,
+        "retrieval_config_serialized": serialize_config(retrieval_config),
         "trace": [],
     }, config=_config(callbacks=[usage], thread_id=thread_id))
     interrupts = out.get("__interrupt__") if isinstance(out, dict) else None

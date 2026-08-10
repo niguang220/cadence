@@ -1,14 +1,29 @@
 """Aggregation of EvalRecords into the roadmap Step-1 report (pure logic)."""
 from evalharness.e2e_eval import EvalRecord, summarize
 
+_CFG = {"name": "lexical_baseline"}
 
-def _rec(cat, sl, match, *, first=True, final=True, repairs=0, lat=100.0):
+
+def _rec(cat, sl, match, *, first=True, final=True, repairs=0, lat=100.0, retrieval_k=5,
+        repeat_index=0):
     return EvalRecord(id=f"{cat}-{sl}-{match}", category=cat, question="q",
-                      semantic_layer=sl, retrieval_config="lexical",
+                      semantic_layer=sl, retrieval_config=_CFG, retrieval_k=retrieval_k,
+                      repeat_index=repeat_index,
                       predicted_sql="s", gold_sql="g", exec_match=match,
                       sql_valid_first_try=first, sql_valid_final=final,
                       repair_attempts=repairs, latency_ms=lat,
                       prompt_tokens=10, completion_tokens=2)
+
+
+def _mk_control(*, id, semantic_layer, exec_match, retrieval_config, retrieval_k, repeat_index,
+                first=True, final=True, repairs=0, lat=1.0):
+    return EvalRecord(id=id, category="control", question="q",
+                      semantic_layer=semantic_layer, retrieval_config=retrieval_config,
+                      retrieval_k=retrieval_k, repeat_index=repeat_index,
+                      predicted_sql="s", gold_sql="g", exec_match=exec_match,
+                      sql_valid_first_try=first, sql_valid_final=final,
+                      repair_attempts=repairs, latency_ms=lat,
+                      prompt_tokens=1, completion_tokens=1)
 
 
 def test_traps_split_on_off():
@@ -20,16 +35,24 @@ def test_traps_split_on_off():
 
 
 def test_controls_diverging_ids_flag_asymmetry():
-    on = EvalRecord(id="c1", category="control", question="q", semantic_layer=True,
-                    retrieval_config="lexical", predicted_sql="s", gold_sql="g",
-                    exec_match=True, sql_valid_first_try=True, sql_valid_final=True,
-                    repair_attempts=0, latency_ms=1.0, prompt_tokens=1, completion_tokens=1)
-    off = EvalRecord(id="c1", category="control", question="q", semantic_layer=False,
-                     retrieval_config="lexical", predicted_sql="s", gold_sql="g",
-                     exec_match=False, sql_valid_first_try=True, sql_valid_final=True,
-                     repair_attempts=0, latency_ms=1.0, prompt_tokens=1, completion_tokens=1)
+    on = _mk_control(id="c1", semantic_layer=True, exec_match=True, retrieval_config=_CFG,
+                     retrieval_k=5, repeat_index=0)
+    off = _mk_control(id="c1", semantic_layer=False, exec_match=False, retrieval_config=_CFG,
+                      retrieval_k=5, repeat_index=0)
     s = summarize([on, off])
     assert s["controls"]["diverging_ids"] == ["c1"]
+
+
+def test_repeats_disagree_but_paired_on_off_agree_is_not_divergent():
+    cfg = {"name": "current_hybrid"}
+
+    def rec(sl, match, rep):
+        return _mk_control(id="c1", semantic_layer=sl, exec_match=match, retrieval_config=cfg,
+                           retrieval_k=5, repeat_index=rep)
+
+    recs = [rec(False, True, 0), rec(True, True, 0),     # repeat 0: ON==OFF (agree)
+            rec(False, False, 1), rec(True, False, 1)]   # repeat 1: ON==OFF (agree) but differs from rep 0
+    assert summarize(recs)["controls"]["diverging_ids"] == []    # model randomness, NOT divergence
 
 
 def test_repair_lift_and_percentiles():

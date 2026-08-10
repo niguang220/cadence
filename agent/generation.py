@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from agent.execution import ExecutionResult
 from agent.prompts import SQL_SYSTEM_PROMPT
+from agent.retrieval.contracts import RetrievalResult
 
 _NO_QUERY = "(no query run)"
 
@@ -77,3 +78,4 @@ class AnswerResult:
     trace: list[dict] = field(default_factory=list)
     usage: dict = field(default_factory=dict)   # token + latency totals for the run
     python_analysis: dict | None = None   # a Python step's parsed output (analysis + any chart)
+    retrieval_result: "RetrievalResult | None" = None   # reconstructed typed retrieval trace

@@ -10,7 +10,11 @@
       "occurred_at within 28 days before the as-of date",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Counting any event in the last 30 days, or including demo/internal_test accounts."
+    "common_mistake": "Counting any event in the last 30 days, or including demo/internal_test accounts.",
+    "required_tables": ["account", "activity_event"],
+    "required_columns": ["activity_event.user_id", "activity_event.event_category",
+                          "activity_event.occurred_at", "activity_event.account_id",
+                          "account.account_id", "account.account_type"]
   },
   {
     "name": "mrr",
@@ -23,7 +27,10 @@
       "phase IN ('paid','grandfathered')",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Summing plan.list_price (annual not /12), or counting trial/comped subscriptions."
+    "common_mistake": "Summing plan.list_price (annual not /12), or counting trial/comped subscriptions.",
+    "required_tables": ["account", "subscription"],
+    "required_columns": ["subscription.mrr", "subscription.ended_on", "subscription.phase",
+                          "subscription.account_id", "account.account_id", "account.account_type"]
   },
   {
     "name": "mrr_weighted_churn",
@@ -37,7 +44,12 @@
       "exclude trial cancellations (they are not in mrr_movement)",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Logo churn (counting churned accounts) instead of MRR-weighting; counting trial cancellations."
+    "common_mistake": "Logo churn (counting churned accounts) instead of MRR-weighting; counting trial cancellations.",
+    "required_tables": ["account", "mrr_movement", "subscription"],
+    "required_columns": ["mrr_movement.mrr_delta", "mrr_movement.type", "mrr_movement.occurred_on",
+                          "mrr_movement.account_id", "subscription.mrr", "subscription.phase",
+                          "subscription.ended_on", "subscription.account_id",
+                          "account.account_id", "account.account_type"]
   },
   {
     "name": "arr",
@@ -50,7 +62,10 @@
       "phase IN ('paid','grandfathered')",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Summing plan.list_price directly for annual plans (already annualized) instead of using subscription.mrr * 12."
+    "common_mistake": "Summing plan.list_price directly for annual plans (already annualized) instead of using subscription.mrr * 12.",
+    "required_tables": ["account", "subscription"],
+    "required_columns": ["subscription.mrr", "subscription.ended_on", "subscription.phase",
+                          "subscription.account_id", "account.account_id", "account.account_type"]
   },
   {
     "name": "arpu",
@@ -64,7 +79,11 @@
       "plan.tier IN ('starter','pro','enterprise')",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Including free/trial/comped/staff subscriptions in the account count, or using logo count of all accounts instead of only paying accounts."
+    "common_mistake": "Including free/trial/comped/staff subscriptions in the account count, or using logo count of all accounts instead of only paying accounts.",
+    "required_tables": ["account", "plan", "subscription"],
+    "required_columns": ["subscription.mrr", "subscription.account_id", "subscription.ended_on",
+                          "subscription.phase", "subscription.plan_id", "plan.plan_id", "plan.tier",
+                          "account.account_id", "account.account_type"]
   },
   {
     "name": "expansion_mrr",
@@ -77,7 +96,10 @@
       "occurred_on within the period",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Including 'new' movements (new subscriptions) instead of only 'expansion'; including test accounts."
+    "common_mistake": "Including 'new' movements (new subscriptions) instead of only 'expansion'; including test accounts.",
+    "required_tables": ["account", "mrr_movement"],
+    "required_columns": ["mrr_movement.mrr_delta", "mrr_movement.type", "mrr_movement.occurred_on",
+                          "mrr_movement.account_id", "account.account_id", "account.account_type"]
   },
   {
     "name": "contraction_mrr",
@@ -90,7 +112,10 @@
       "occurred_on within the period",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Confusing contraction with churn; not negating mrr_delta (which is negative for contraction) to get a positive shrinkage value."
+    "common_mistake": "Confusing contraction with churn; not negating mrr_delta (which is negative for contraction) to get a positive shrinkage value.",
+    "required_tables": ["account", "mrr_movement"],
+    "required_columns": ["mrr_movement.mrr_delta", "mrr_movement.type", "mrr_movement.occurred_on",
+                          "mrr_movement.account_id", "account.account_id", "account.account_type"]
   },
   {
     "name": "recognized_revenue",
@@ -103,7 +128,11 @@
       "join to invoice and account to apply account filters",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Using invoice.amount (billed/cash) instead of revenue_recognition.amount (amortized); annual invoices must be spread across 12 months."
+    "common_mistake": "Using invoice.amount (billed/cash) instead of revenue_recognition.amount (amortized); annual invoices must be spread across 12 months.",
+    "required_tables": ["account", "invoice", "revenue_recognition"],
+    "required_columns": ["revenue_recognition.amount", "revenue_recognition.recognized_on",
+                          "revenue_recognition.invoice_id", "invoice.invoice_id", "invoice.account_id",
+                          "account.account_id", "account.account_type"]
   },
   {
     "name": "billed_revenue",
@@ -115,6 +144,9 @@
       "invoice.issued_on within the period",
       "account_type NOT IN ('demo','internal_test')"
     ],
-    "common_mistake": "Using revenue_recognition.amount (amortized/GAAP) instead of invoice.amount; this metric is billed/cash basis and will spike for annual invoices."
+    "common_mistake": "Using revenue_recognition.amount (amortized/GAAP) instead of invoice.amount; this metric is billed/cash basis and will spike for annual invoices.",
+    "required_tables": ["account", "invoice"],
+    "required_columns": ["invoice.amount", "invoice.issued_on", "invoice.account_id",
+                          "account.account_id", "account.account_type"]
   }
 ]

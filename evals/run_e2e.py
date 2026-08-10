@@ -20,34 +20,33 @@ from pathlib import Path
 
 from agent.db.build_saas_db import build
 from agent.db.introspect import introspect
+from agent.retrieval.contracts import RetrievalConfig
+from agent.retrieval.serde import serialize_config
 from evalharness.e2e_eval import run_case, summarize
 from evalharness.golden import SAAS_METRICS_PATH, load_saas_metrics
 
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 
 
-def run_e2e(db_path, tables, cases, model, *, repeats: int = 5,
-            configs=(False, True)) -> dict:
+def run_e2e(db_path, tables, cases, model, *, config: RetrievalConfig, k: int = 5, repeats: int = 5,
+            semantic_layers=(False, True)) -> dict:
     records = []
-    for semantic_layer in configs:
-        for _ in range(repeats):
+    for repeat_index in range(repeats):
+        for semantic_layer in semantic_layers:           # OFF then ON, paired within a repeat
             for case in cases:
-                records.append(run_case(db_path, tables, case, model,
-                                        semantic_layer=semantic_layer))
+                records.append(run_case(db_path, tables, case, model, semantic_layer=semantic_layer,
+                                        config=config, k=k, repeat_index=repeat_index))
     return {"records": [asdict(r) for r in records], "summary": summarize(records),
-            "repeats": repeats, "configs": list(configs)}
+            "repeats": repeats, "semantic_layer_configs": list(semantic_layers),
+            "retrieval_config": serialize_config(config), "retrieval_k": k}
 
 
-def build_report(db_path, tables, cases, model, *, model_name: str,
+def build_report(db_path, tables, cases, model, *, model_name: str, config: RetrievalConfig, k: int = 5,
                  repeats: int = 5) -> dict:
-    out = run_e2e(db_path, tables, cases, model, repeats=repeats)
-    return {
-        "measured": True,
-        "model": model_name,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "golden_sha256": hashlib.sha256(Path(SAAS_METRICS_PATH).read_bytes()).hexdigest(),
-        **out,
-    }
+    out = run_e2e(db_path, tables, cases, model, config=config, k=k, repeats=repeats)
+    return {"measured": True, "model": model_name,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "golden_sha256": hashlib.sha256(Path(SAAS_METRICS_PATH).read_bytes()).hexdigest(), **out}
 
 
 def main() -> None:
@@ -66,8 +65,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as workdir:
         db = str(build(Path(workdir) / "saas.db"))
         tables = introspect(db)
-        report = build_report(db, tables, load_saas_metrics(), model,
-                              model_name=model_name, repeats=5)
+        config = RetrievalConfig.lexical_baseline()
+        report = build_report(db, tables, load_saas_metrics(), model, model_name=model_name,
+                              config=config, k=5, repeats=5)
 
     _REPORT_DIR.mkdir(parents=True, exist_ok=True)
     out = _REPORT_DIR / f"e2e_baseline_{time.strftime('%Y%m%d_%H%M%S')}.json"

@@ -34,7 +34,7 @@ def test_schema_retrieval_renders_every_required_table(tmp_path):
     # Causal-cleanliness gate: if the schema retriever misses a required table, an OFF/ON
     # miss would be a SCHEMA-LINKING failure, not a business-semantics one. Require recall 1.0.
     import re
-    from agent.db.introspect import introspect, render_schema
+    from agent.db.introspect import expand_with_fk_neighbors, introspect, render_schema
     from agent.hybrid_retriever import retrieve
 
     def _rendered_tables(rendered_text, tables):
@@ -59,7 +59,7 @@ def test_schema_retrieval_renders_every_required_table(tmp_path):
     tables = introspect(db)
     for case in CASES:
         top = retrieve(case["question"], tables, k=5)
-        rendered_text = render_schema(tables, only=top, include_fk_neighbors=True)
+        rendered_text = render_schema(tables, only=sorted(expand_with_fk_neighbors(tables, top)))
         rendered = _rendered_tables(rendered_text, tables)
         missing = set(case["required_tables"]) - rendered
         assert not missing, f'{case["id"]}: schema retrieval missed {missing} -> reword question/raise k, do not pass'

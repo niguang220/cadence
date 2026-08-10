@@ -9,7 +9,7 @@ import sqlite3
 import pytest
 
 from agent.db.build_demo_db import build
-from agent.db.introspect import introspect, render_schema
+from agent.db.introspect import expand_with_fk_neighbors, introspect, render_schema
 
 
 def _db(tmp_path):
@@ -112,20 +112,18 @@ def test_pii_columns_are_hidden_from_rendered_schema(tmp_path):
 
 def test_render_fk_neighbors_includes_referenced_tables(tmp_path):
     tables = introspect(_db(tmp_path))
-    rendered = render_schema(tables, only=["invoice_line"], include_fk_neighbors=True)
-    # trailing " (" disambiguates 'invoice' from 'invoice_line'
-    assert "TABLE invoice_line (" in rendered
-    assert "TABLE invoice (" in rendered   # FK neighbor
-    assert "TABLE track (" in rendered     # FK neighbor
+    closure = expand_with_fk_neighbors(tables, ["invoice_line"])
+    assert {"invoice_line", "invoice", "track"} <= closure       # FK neighbours (both directions)
+    # render_schema itself is pure: given only=[invoice_line] it must NOT pull invoice in
     assert "TABLE invoice (" not in render_schema(tables, only=["invoice_line"])
 
 
 def test_fk_neighbors_are_bidirectional(tmp_path):
     # picking a parent table should also pull its child tables (incoming FKs)
     tables = introspect(_db(tmp_path))
-    rendered = render_schema(tables, only=["invoice"], include_fk_neighbors=True)
-    assert "TABLE customer (" in rendered      # outgoing: invoice -> customer
-    assert "TABLE invoice_line (" in rendered  # incoming: invoice_line -> invoice
+    closure = expand_with_fk_neighbors(tables, ["invoice"])
+    assert "customer" in closure       # outgoing: invoice -> customer
+    assert "invoice_line" in closure    # incoming: invoice_line -> invoice
 
 
 def test_low_cardinality_samples_not_truncated(tmp_path):
