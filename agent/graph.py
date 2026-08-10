@@ -68,6 +68,7 @@ from agent.prompts import (CANNOT_ANSWER, REPAIR_INSTRUCTION, REPAIR_PROMPT,
 from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
 from agent.retrieval.contracts import RetrievalConfig
+from agent.retrieval.grounding import value_grounding_block
 from agent.retrieval.metric_match import deserialize_hits, serialize_hits, validate_all_metrics
 from agent.retrieval.pipeline import run_retrieval
 from agent.retrieval.serde import (deserialize_config, deserialize_result, serialize_config,
@@ -99,6 +100,9 @@ _HITL_CHECKPOINTER = InMemorySaver()
 # This in-memory registry is enough for the local demo; a service deployment would
 # rebuild the model from provider config per thread/process.
 _HITL_MODELS = {}
+# Same reasoning for the value-search backend (an ES client is not checkpoint-serializable):
+# a HITL run keeps it in a thread-keyed registry, never in the checkpointed state.
+_HITL_VALUE_BACKENDS = {}
 
 
 def _metric_registry() -> MetricRegistry:
@@ -300,21 +304,25 @@ def _retrieval_config(state: AgentState) -> RetrievalConfig:
     return deserialize_config(serialized) if serialized else RetrievalConfig.current_hybrid()
 
 
-def _schema_recall(state: AgentState) -> dict:
+def _schema_recall(state: AgentState, config=None) -> dict:
     """Retrieval via the typed pipeline. current_hybrid (default) reproduces today's hybrid recall +
     one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate top-k. The rendered
     prompt set is relation_plan.context_tables (which equals it for RRF and equals the one-hop closure
-    for legacy). Empty recall -> feasibility owns the refusal, exactly as before."""
+    for legacy). Empty recall -> feasibility owns the refusal, exactly as before.
+
+    The value backend is resolved from the injected runtime seam (state / thread registry), so a value
+    config reaches ES here; ``value_grounding`` projects the canonical matched values for generation."""
     tables = state.get("tables") or introspect(state["db_path"])
-    config = _retrieval_config(state)
+    rconfig = _retrieval_config(state)
     hits = deserialize_hits(state.get("semantic_metric_hits", []))
-    result = run_retrieval(_retrieval_question(state), tables, config,
-                           k=state.get("k", 5), metric_hits=hits)
-    if config.fusion == "legacy_minmax":
+    result = run_retrieval(_retrieval_question(state), tables, rconfig, k=state.get("k", 5),
+                           metric_hits=hits, value_backend=_value_backend_for_state(state, config))
+    if rconfig.fusion == "legacy_minmax":
         retrieved = [c.table for c in result.candidates]     # pre-expansion top-k (unchanged public value)
     else:
         retrieved = list(result.selection.anchor_tables)
     base = {"tables": tables, "retrieved_tables": retrieved,
+            "value_grounding": value_grounding_block(result),
             "retrieval_result_serialized": serialize_result(result)}
     if not retrieved:
         return {**base, "schema": "",
@@ -416,6 +424,13 @@ def _model_for_state(state: AgentState, config):
     return _HITL_MODELS.get(thread_id)
 
 
+def _value_backend_for_state(state: AgentState, config):
+    """The injected value backend: from state (non-HITL) or the thread registry (HITL resume, where
+    the checkpoint omits it). None when nothing was injected -> the pipeline degrades (typed)."""
+    thread_id = state.get("thread_id") or (config or {}).get("configurable", {}).get("thread_id")
+    return state.get("value_backend") or _HITL_VALUE_BACKENDS.get(thread_id)
+
+
 def _generate_sql(state: AgentState, config=None) -> dict:
     attempts = state.get("attempts", 0)
     model = state.get("model") or _model_for_state(state, config)
@@ -429,7 +444,8 @@ def _generate_sql(state: AgentState, config=None) -> dict:
         registry = _metric_registry()
         mets = _semantic_metrics(state)
         metric_block = registry.format(mets)
-    block = format_clarification_intent(state.get("clarification_intent")) + metric_block
+    block = (format_clarification_intent(state.get("clarification_intent")) + metric_block
+             + state.get("value_grounding", ""))   # safe, capped, data-only canonical value matches
 
     if hasattr(model, "bind_tools"):
         sql = _generate_with_tools(state, model, attempts, requested, block)
@@ -919,8 +935,11 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
 def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
               tables=None, semantic_layer: bool = False,
               threshold: float = 0.5, clarify: bool = True,
-              retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid()) -> AnswerResult:
-    """Invoke the compiled graph and map the final state to an AnswerResult."""
+              retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+              value_backend=None) -> AnswerResult:
+    """Invoke the compiled graph and map the final state to an AnswerResult. ``value_backend`` is
+    an optional value-search backend (protocol) for value retrieval configs; None -> the pipeline
+    degrades typed (value_degraded), never silently."""
     setup_phoenix()  # no-op unless PHOENIX_ENABLED; sends span trees to the Phoenix UI
     # a callback captures token + latency for every model call nested in the nodes,
     # so the generate code carries no tracing plumbing. This relies on LangChain
@@ -931,6 +950,7 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
         "question": question,
         "db_path": str(db_path),
         "model": model,
+        "value_backend": value_backend,   # non-HITL: in state (no checkpoint); the graph never sees ES
         "k": k,
         "tables": tables,
         "semantic_layer": semantic_layer,
@@ -946,17 +966,22 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
                         tables=None, semantic_layer: bool = False,
                         threshold: float = 0.5,
                         thread_id: str | None = None,
-                        retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid()
+                        retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+                        value_backend=None
                         ) -> tuple[str, AnswerResult | dict]:
     """Start a HITL-capable run. Returns ``(thread_id, result_or_interrupt)``.
 
     If the graph pauses for clarification, the second value is the interrupt payload:
     ``{"question": ..., "clarification": ...}``. Otherwise it is an ``AnswerResult``.
     Resume an interrupted run with ``resume_agent_session`` and the same thread id.
+
+    ``value_backend`` is kept in the thread registry (like ``model``), NEVER in the checkpointed
+    state, so an unserializable ES client can't break checkpointing; it is dropped on completion.
     """
     setup_phoenix()
     thread_id = thread_id or str(uuid4())
     _HITL_MODELS[thread_id] = model
+    _HITL_VALUE_BACKENDS[thread_id] = value_backend
     usage = UsageCallback()
     out = _HITL_AGENT.invoke({
         "question": question,
@@ -975,6 +1000,7 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
     if interrupts:
         return thread_id, interrupts[0].value
     _HITL_MODELS.pop(thread_id, None)
+    _HITL_VALUE_BACKENDS.pop(thread_id, None)
     return thread_id, _to_answer(out, usage)
 
 
@@ -995,4 +1021,5 @@ def resume_agent_session(thread_id: str, response) -> tuple[str, AnswerResult | 
     if interrupts:
         return thread_id, interrupts[0].value
     _HITL_MODELS.pop(thread_id, None)
+    _HITL_VALUE_BACKENDS.pop(thread_id, None)
     return thread_id, _to_answer(out, usage)

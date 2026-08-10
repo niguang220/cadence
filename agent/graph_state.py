@@ -20,6 +20,7 @@ class AgentState(TypedDict, total=False):
     question: str
     db_path: str
     model: Any                       # chat model (real or a fake in tests); omitted in HITL checkpoints
+    value_backend: Any               # value-search backend (protocol); like model, omitted in HITL checkpoints
     k: int
     tables: Any                      # cached introspection (list[Table]) or None
     semantic_layer: bool             # inject governed metric definitions into prompts
@@ -42,6 +43,7 @@ class AgentState(TypedDict, total=False):
     normalized_clarification: str
     clarification_intent: dict[str, str]
     schema: str
+    value_grounding: str             # safe, capped, data-only block of canonical matched values for SQL gen
     sql: str
     error: Optional[str]             # set by validate when the result is bad/suspicious
     repair_kind: str                 # why we're repairing (exec_error / missing_order / ...)
