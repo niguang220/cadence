@@ -16,9 +16,12 @@ GATE_PATH = _GOLDEN_DIR / "gate.json"
 CONSISTENCY_PATH = _GOLDEN_DIR / "consistency.json"
 SANDBOX_PATH = _GOLDEN_DIR / "sandbox.json"
 SAAS_METRICS_PATH = _GOLDEN_DIR / "saas_metrics.json"
+VALUE_LINKING_PATH = _GOLDEN_DIR / "value_linking.json"
 
 _ROUTES = {"out_of_scope", "feasibility_refuse", "proceed"}
 _CATEGORIES = {"measure", "grain", "entity", "dropped_filter"}
+_VALUE_LINKING_CATEGORIES = {"en", "zh", "fuzzy", "no_hit", "pii", "off_topic"}
+_VALUE_LINKING_POSITIVE = {"en", "zh", "fuzzy"}
 
 
 @dataclass
@@ -61,6 +64,16 @@ class SaasMetricsCase:
     gold_sql: str
     wrong_sql: str = ""
     required_tables: list[str] = field(default_factory=list)
+    note: str = ""
+
+
+@dataclass
+class ValueLinkingCase:
+    id: str
+    category: str            # en | zh | fuzzy | no_hit | pii | off_topic
+    question: str
+    required_tables: list[str] = field(default_factory=list)
+    expect_value_hit: bool = True
     note: str = ""
 
 
@@ -127,6 +140,22 @@ def load_saas_metrics(path: Path = SAAS_METRICS_PATH) -> list[SaasMetricsCase]:
             raise ValueError(f"{path}: case {c.id!r} has empty required_tables")
         if not c.gold_sql.strip():
             raise ValueError(f"{path}: case {c.id!r} has empty gold_sql")
+    return cases
+
+
+def load_value_linking(path: Path = VALUE_LINKING_PATH) -> list[ValueLinkingCase]:
+    cases = _build(ValueLinkingCase, path)
+    for c in cases:
+        if c.category not in _VALUE_LINKING_CATEGORIES:
+            raise ValueError(f"{path}: case {c.id!r} bad category {c.category!r}")
+        if c.category in _VALUE_LINKING_POSITIVE:
+            if not c.expect_value_hit:
+                raise ValueError(f"{path}: positive case {c.id!r} must expect a value hit")
+            if not c.required_tables:
+                raise ValueError(f"{path}: positive case {c.id!r} needs required_tables")
+        else:                                       # no_hit / pii / off_topic are negatives
+            if c.expect_value_hit:
+                raise ValueError(f"{path}: negative case {c.id!r} must not expect a value hit")
     return cases
 
 

@@ -57,8 +57,10 @@ INSERT INTO company VALUES
   (1,'Globex Corporation',1,1,1),
   (2,'Initech LLC',1,3,2),
   (3,'北京数据科技有限公司',3,1,1),
-  (4,'Umbrella Health',2,2,1),
-  (5,'Stark Industries',1,1,2);
+  (4,'Umbrella Health',2,2,1),(5,'Stark Industries',1,1,2),(6,'Wayne Enterprises',1,3,1),
+  (7,'Cyberdyne Systems',3,1,2),(8,'Wonka Industries',2,2,1),(9,'Soylent Corp',1,3,2),
+  (10,'Tyrell Corporation',3,1,1),(11,'Massive Dynamic',1,1,2),(12,'Aperture Science',2,1,1),
+  (13,'Hooli',1,1,2),(14,'Pied Piper',1,1,1),(15,'Vandelay Industries',2,3,2),(16,'Gekko Capital',1,3,1);
 INSERT INTO person VALUES
   (1,1,'John Smith','john.smith@globex.com','+1-202-555-0101'),
   (2,1,'Mary Jones','mary.jones@globex.com','+1-202-555-0102'),
@@ -66,12 +68,20 @@ INSERT INTO person VALUES
   (4,3,'李伟','li.wei@bjdata.cn','+86-10-5555-0104');
 INSERT INTO catalog VALUES
   (1,'Acme Widget','WGT-100',1),
-  (2,'HyperGadget','HGT-200',2),
-  (3,'DataSync Pro','DSP-300',1);
+  (2,'HyperGadget','HGT-200',2),(3,'DataSync Pro','DSP-300',1),(4,'CloudVault','CLV-400',1),
+  (5,'StreamForge','STF-500',2),(6,'PixelPerfect','PXP-600',1),(7,'QuantumCore','QTC-700',2),
+  (8,'NimbusEdge','NBE-800',1),(9,'IronGate','IRG-900',2),(10,'SwiftLedger','SWL-1000',1),
+  (11,'BrightAnalytics','BRA-1100',2),(12,'SecureMailer','SCM-1200',1),(13,'FleetTracker','FLT-1300',2),
+  (14,'OmniDash','OMD-1400',1);
 INSERT INTO agreement VALUES
   (1,'CT-2025-0042',1,3,'2025-01-01','2025-12-31'),
-  (2,'CT-2025-0099',3,2,'2025-02-01','2026-01-31'),
-  (3,'CT-2025-0100',2,1,'2025-03-01',NULL);
+  (2,'CT-2025-0099',3,2,'2025-02-01','2026-01-31'),(3,'CT-2025-0100',2,1,'2025-03-01',NULL),
+  (4,'CT-2025-0101',4,2,'2025-01-15',NULL),(5,'CT-2025-0102',5,3,'2025-02-01',NULL),
+  (6,'CT-2025-0103',6,2,'2025-02-10',NULL),(7,'CT-2025-0104',7,1,'2025-03-01',NULL),
+  (8,'CT-2025-0105',8,2,'2025-03-15',NULL),(9,'CT-2025-0106',9,3,'2025-04-01',NULL),
+  (10,'CT-2025-0107',10,2,'2025-04-10',NULL),(11,'CT-2025-0108',11,1,'2025-05-01',NULL),
+  (12,'CT-2025-0109',12,2,'2025-05-15',NULL),(13,'CT-2025-0110',13,3,'2025-06-01',NULL),
+  (14,'CT-2025-0111',14,2,'2025-06-10',NULL);
 INSERT INTO deal VALUES
   (1,'Globex Renewal 2025',1,'won',120000.0),
   (2,'Initech Expansion',2,'open',45000.0),

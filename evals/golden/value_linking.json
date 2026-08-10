@@ -1,0 +1,66 @@
+[
+  {
+    "id": "en_globex_tickets",
+    "category": "en",
+    "question": "How many open tickets does Globex Corporation have?",
+    "required_tables": ["company", "ticket"],
+    "expect_value_hit": true,
+    "note": "'Globex Corporation' is a searchable company value with no lexical/table footing; value retrieval must link it to company, and the FK closure recovers ticket."
+  },
+  {
+    "id": "zh_bjdata_contracts",
+    "category": "zh",
+    "question": "北京数据科技有限公司 有几份合同?",
+    "required_tables": ["company", "agreement"],
+    "expect_value_hit": true,
+    "note": "Chinese company name -> company; agreement recovered via FK."
+  },
+  {
+    "id": "en_acme_sku",
+    "category": "en",
+    "question": "What is the SKU of the Acme Widget product?",
+    "required_tables": ["catalog"],
+    "expect_value_hit": true,
+    "note": "'Acme Widget' is a searchable catalog product name."
+  },
+  {
+    "id": "fuzzy_globex",
+    "category": "fuzzy",
+    "question": "Show open tickets for Globexx Corporaton",
+    "required_tables": ["company", "ticket"],
+    "expect_value_hit": true,
+    "note": "Near-spelling ('Globexx Corporaton') must still fuzzy-link to the Globex company; the table word 'tickets' provides the lexical admission footing."
+  },
+  {
+    "id": "en_contract_owner",
+    "category": "en",
+    "question": "Which account owns contract CT-2025-0042?",
+    "required_tables": ["agreement", "company"],
+    "expect_value_hit": true,
+    "note": "Contract external id 'CT-2025-0042' -> agreement; company recovered via FK."
+  },
+  {
+    "id": "no_hit_megacorp",
+    "category": "no_hit",
+    "question": "How many tickets does Nonexistent Megacorp Ltd have?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "note": "No such value is seeded; value retrieval must not fabricate a link."
+  },
+  {
+    "id": "pii_contact_email",
+    "category": "pii",
+    "question": "What is the email address of the contact John Smith?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "note": "'John Smith' is a person.full_name (PII, never indexed); the value index must not link a PII value."
+  },
+  {
+    "id": "off_topic_weather",
+    "category": "off_topic",
+    "question": "What is the weather in Tokyo today?",
+    "required_tables": [],
+    "expect_value_hit": false,
+    "note": "Off-topic negative: no value footing, admission must reject."
+  }
+]
