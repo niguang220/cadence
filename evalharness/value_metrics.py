@@ -15,12 +15,20 @@ def rank_sensitive_metrics(retrieval_result, gold_tables) -> dict:
     def recall(stage: set):
         return (len(gold & stage) / len(gold)) if gold else None       # gold-less negatives -> None
 
+    selection = list(retrieval_result.selection.anchor_tables)
+    context = list(retrieval_result.relation_plan.context_tables)
     return {
         "candidate_tables_ordered": ordered,
         "candidate_count": len(ordered),
         "candidate_recall": recall(cand),
-        "fusion_at_5_recall": recall(top5),                             # gold in top-5 by fusion rank
+        # fusion_at_5_recall = gold within the config's OWN top-5 candidate ordering (fusion_rank).
+        # For RRF configs that rank is the RRF fused rank; for legacy_minmax (current_hybrid) it is the
+        # min-max hybrid position (legacy_candidates sets fusion_rank = rank). Same "candidate-order@5"
+        # question either way, so the metric is comparable across the four configs.
+        "fusion_at_5_recall": recall(top5),
         "candidate_precision": (len(gold & cand) / len(cand)) if cand else None,
-        "selection_tables": list(retrieval_result.selection.anchor_tables),
-        "context_tables": list(retrieval_result.relation_plan.context_tables),
+        "selection_tables": selection,
+        "context_tables": context,
+        "selection_recall": recall(set(selection)),                     # gold kept after selector top-k
+        "context_recall": recall(set(context)),                         # gold in the rendered context set
     }

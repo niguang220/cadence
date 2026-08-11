@@ -12,8 +12,10 @@ DEEPSEEK_API_KEY. The record layer stores tables / tiers / ranks / booleans only
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from agent.db.build_value_db import build
@@ -21,6 +23,7 @@ from agent.db.introspect import introspect
 from agent.graph import run_agent
 from agent.retrieval.contracts import RetrievalConfig
 from agent.retrieval.pipeline import run_retrieval
+from agent.retrieval.serde import serialize_config
 from agent.retrieval.value_index import build_value_index
 from evalharness.golden import load_value_linking
 from evalharness.oracle import execution_match
@@ -30,10 +33,14 @@ from agent.execution import run_query
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
 
+# Stage 3B head-to-head: the shipping default (current_hybrid, legacy_minmax + one_hop — a
+# byte-identical control) against the RRF candidate-production line. dense_value (RRF + shortest_path
+# + value) is the candidate production scheme; rrf_hybrid and value_ablation isolate the dense and
+# value increments. No legacy_minmax+value config, no new fusion strategy, no name-based routing.
 _CONFIGS = {
-    "lexical": RetrievalConfig.lexical_baseline,
-    "value": RetrievalConfig.value_ablation,
-    "dense": RetrievalConfig.rrf_hybrid,
+    "current_hybrid": RetrievalConfig.current_hybrid,
+    "rrf_hybrid": RetrievalConfig.rrf_hybrid,
+    "value_ablation": RetrievalConfig.value_ablation,
     "dense_value": RetrievalConfig.dense_value,
 }
 _HIGH_CONF = {"exact_keyword", "exact_phrase"}
@@ -141,11 +148,51 @@ def run_value_e2e(db, tables, primaries, controls, model, value_backend, *,
 
 
 def _frozen_sha(cases) -> str:
-    import hashlib
     payload = json.dumps([{"id": c.id, "question": c.question, "gold_sql": c.gold_sql,
                            "required_tables": list(c.required_tables)} for c in cases],
                          sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def config_provenance() -> list[dict]:
+    """Canonical serialization of every config in the matrix (the record layer stamps ``config`` =
+    config.name; this proves what each name resolved to)."""
+    return [serialize_config(f()) for f in _CONFIGS.values()]
+
+
+def _config_sha() -> str:
+    payload = json.dumps(config_provenance(), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _paired(records, a: str, b: str) -> dict:
+    """Per-case A-vs-B exec_match over repeats (matched/5). A win/loss/tie is decided on the matched
+    count; single-repeat ±1 noise is intentionally surfaced per-case, not collapsed into a verdict."""
+    by_case: dict = defaultdict(lambda: {a: [], b: []})
+    for r in records:
+        if r["kind"] == "primary" and r["config"] in (a, b):
+            by_case[r["case"]][r["config"]].append(bool(r["exec_match"]))
+    per_case, wins, losses, ties = {}, 0, 0, 0
+    for case, d in sorted(by_case.items()):
+        if not d[a] or not d[b]:
+            continue
+        av, bv = sum(d[a]), sum(d[b])
+        per_case[case] = {a: f"{av}/{len(d[a])}", b: f"{bv}/{len(d[b])}"}
+        wins += av > bv
+        losses += av < bv
+        ties += av == bv
+    return {"a": a, "b": b, "metric": "exec_match", "wins": wins, "losses": losses, "ties": ties,
+            "per_case": per_case}
+
+
+def summarize(report: dict) -> dict:
+    """The three head-to-head questions this stage exists to answer."""
+    recs = report["records"]
+    return {
+        "dense_value_vs_current_hybrid": _paired(recs, "dense_value", "current_hybrid"),  # cutover call
+        "dense_value_vs_rrf_hybrid": _paired(recs, "dense_value", "rrf_hybrid"),           # value increment
+        "dense_value_vs_value_ablation": _paired(recs, "dense_value", "value_ablation"),   # dense increment
+    }
 
 
 def build_report(db, tables, cases, model, value_backend, *, model_name: str,
@@ -156,12 +203,16 @@ def build_report(db, tables, cases, model, value_backend, *, model_name: str,
     controls = [by_id[i] for i in control_ids]                # frozen 4 by default
     out = run_value_e2e(db, tables, primaries, controls, model, value_backend,
                         repeats=repeats, concurrency=concurrency)
-    return {"measured": True, "kind": "value_full_agent_e2e", "model": model_name,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "n_tables": len(tables),
-            "frozen_case_sha256": _frozen_sha(primaries + controls),  # over the ACTUAL selection
-            "selected_primaries": list(primary_ids),
-            "selected_controls": list(control_ids), **out}
+    report = {"measured": True, "kind": "value_full_agent_e2e", "model": model_name,
+              "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "n_tables": len(tables),
+              "frozen_case_sha256": _frozen_sha(primaries + controls),  # over the ACTUAL selection
+              "frozen_config_sha256": _config_sha(),                    # over the 4 canonical configs
+              "config_provenance": config_provenance(),
+              "selected_primaries": list(primary_ids),
+              "selected_controls": list(control_ids), **out}
+    report["summary"] = summarize(report)                             # paired head-to-head, per case
+    return report
 
 
 def main() -> None:  # pragma: no cover - requires real ES + DEEPSEEK_API_KEY
@@ -201,6 +252,9 @@ def main() -> None:  # pragma: no cover - requires real ES + DEEPSEEK_API_KEY
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"wrote {out} ({report['n_records']} runs = {report['n_primary']} primary "
           f"+ {report['n_control']} control)")
+    print(f"case SHA {report['frozen_case_sha256'][:16]} · config SHA {report['frozen_config_sha256'][:16]}")
+    for name, p in report["summary"].items():                # head-to-head, per case (exec_match)
+        print(f"  {name}: wins {p['wins']} / losses {p['losses']} / ties {p['ties']}")
 
 
 if __name__ == "__main__":  # pragma: no cover
