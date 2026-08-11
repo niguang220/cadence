@@ -158,16 +158,23 @@ What the harness separated — which is the actual point:
 
 - **Value converts retrieval misses into execution wins** in three categories, including one
   combo-only case: value alone 0/5, dense alone 0/5, the two together 5/5.
-- **Two Chinese cases returned an empty candidate set in that run — root cause unknown.**
+- **Two Chinese cases returned an empty candidate set — confirmed root cause, now fixed.**
   `zh_shyuntu_tickets` and `zh_tianhe_contracts` sat at candidate recall 0.00 under every
-  config, so the agent refused rather than guessed. A follow-up stood up real Elasticsearch
-  8.19 and **disproved** the first hypothesis (a "CJK tokenisation gap"): on fresh, rebuilt,
-  and reused indexes real ES tokenises those names and returns `exact_keyword` hits identical
-  to `FakeValueBackend`. What the investigation *did* confirm is a real defect —
-  `ElasticsearchValueBackend` never checked the `_bulk` response's per-item `errors`, so a
-  partial ingestion failure could silently drop documents (now fixed: ingestion fails loud).
-  Whether that is what bit the historical run is not recoverable from the logs, so the
-  280-run cause stays **unknown** rather than claimed.
+  config, so the agent refused rather than guessed. The investigation took three turns, kept
+  honestly: (1) an initial "real-ES CJK tokenisation gap" hypothesis was **disproved** — real
+  Elasticsearch 8.19 tokenises those names and returns hits identical to `FakeValueBackend`;
+  (2) a **separate** real defect surfaced and was fixed (`ElasticsearchValueBackend` never
+  checked `_bulk` per-item `errors`, so a partial ingestion failure could silently drop
+  documents) — but a targeted 40-run proved it was **not** the cause here; (3) that 40-run,
+  through the full agent, finally **localised** it. The `query_enhance` LLM rewrite drops the
+  whitespace after the Chinese entity (`上海云图信息技术 …` → `上海云图信息技术有限公司…`), and
+  value retrieval was consuming that *enhanced* question. `_classify`'s `exact_keyword` tier
+  depends on whitespace token isolation, so the merged name stopped matching; the value signal
+  vanished, the admission gate then suppressed dense, and the whole candidate set went empty.
+  Fix: value linking now consumes the **original, user-provided** question (lexical/dense keep
+  the enhanced one), and long CJK values match as whitespace-insensitive contiguous substrings
+  (`exact_phrase`). No trigger left unknown, and no model-introduced entity can drive a value
+  admission.
 - **Retrieval-fine / generation-fails** cases isolated as a generation problem (recall 1.0,
   wrong SQL every repeat), out of scope for anything retrieval-side.
 - Controls: 80 runs, **zero PII leak**, zero silent backend fallback, and a full-blob scan of
@@ -242,10 +249,11 @@ Next, in priority order:
 
 1. **A head-to-head canary against the shipping preset** — `current_hybrid + value` measured
    against `current_hybrid` on the same frozen set. That comparison, not the one already run,
-   is what a default flip would actually require. This is the one live follow-up the E2E
-   generated: the earlier "CJK retrieval gap" lead was investigated and **disproved** (see the
-   value-E2E bullet above), and the real defect it surfaced — unchecked ES bulk errors that
-   could silently drop documents — is fixed, so no analyzer work is warranted.
+   is what a default flip would actually require. The two follow-ups the E2E generated are now
+   closed: the empty-candidate root cause was localised to query-ownership (value linking was
+   reading the LLM-enhanced question) and fixed — value now reads the original question and
+   long CJK values match as contiguous substrings; and the separate ingestion defect (unchecked
+   ES bulk errors) is fixed too. No ES analyzer / n-gram work was warranted.
 3. **External validity** — run the E2E path on a frozen, auditable slice of a public
    benchmark (BIRD / Spider), instead of only in-repo fixtures.
 4. **A verifiable semantic layer** — extend the existing metric registry

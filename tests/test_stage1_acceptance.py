@@ -150,8 +150,8 @@ def test_accept_6_graph_renders_context_tables_both_strategies(det_index, tmp_pa
     # shortest_path via the REAL pipeline with a deterministic dense backend (no fastembed)
     real = graph.run_retrieval
     monkeypatch.setattr(graph, "run_retrieval",
-        lambda qq, tt, cc, *, k, metric_hits=None, value_backend=None: real(
-            qq, tt, cc, k=k, metric_hits=metric_hits,
+        lambda qq, tt, cc, *, k, metric_hits=None, value_backend=None, value_query=None: real(
+            qq, tt, cc, k=k, metric_hits=metric_hits, value_query=value_query,
             dense_backend=_FakeDense([("track", "name", 0.9), ("genre", "name", 0.4)])))
     state_r = {"question": q, "tables": tables, "k": 5,
                "retrieval_config_serialized": serialize_config(RetrievalConfig.rrf_hybrid())}

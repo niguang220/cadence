@@ -316,7 +316,9 @@ def _schema_recall(state: AgentState, config=None) -> dict:
     rconfig = _retrieval_config(state)
     hits = deserialize_hits(state.get("semantic_metric_hits", []))
     result = run_retrieval(_retrieval_question(state), tables, rconfig, k=state.get("k", 5),
-                           metric_hits=hits, value_backend=_value_backend_for_state(state, config))
+                           metric_hits=hits, value_backend=_value_backend_for_state(state, config),
+                           value_query=state["question"])   # value linking uses the ORIGINAL user question
+
     if rconfig.fusion == "legacy_minmax":
         retrieved = [c.table for c in result.candidates]     # pre-expansion top-k (unchanged public value)
     else:

@@ -7,7 +7,7 @@ import pytest
 
 from agent.retrieval.value_backend import (ElasticsearchValueBackend, FakeValueBackend,
                                             ValueBackendError, ValueDoc, ValueHit,
-                                            _bulk_error_summary)
+                                            _bulk_error_summary, _classify)
 
 
 def _docs():
@@ -82,6 +82,71 @@ def test_upsert_is_idempotent_by_document_id():
 def test_backend_error_type_exists():
     assert issubclass(ValueBackendError, Exception)
     assert isinstance(ValueHit("t", "c", "v", "exact_keyword", 1.0, "d"), ValueHit)
+
+
+# --- long-CJK contiguous-substring high-confidence matching (the query_enhance merge case) --------
+
+def _is_high_conf(res):
+    return res is not None and res[0] in ("exact_keyword", "exact_phrase")
+
+
+def test_cjk_long_value_matches_when_merged_no_space():
+    # LLM rewrite merged the name with following chars (no whitespace delimiter)
+    v, q = "上海云图信息技术", "上海云图信息技术有限公司有多少个未解决的工单"
+    assert _classify(v, q) == ("exact_phrase", 1.0)
+
+
+def test_cjk_long_value_matches_in_raw_spaced_question():
+    v, q = "广州天河数据服务", "广州天河数据服务 有几份合同?"     # space-isolated -> existing exact path
+    assert _is_high_conf(_classify(v, q))
+
+
+def test_cjk_value_matches_when_original_question_has_no_space():
+    v, q = "北京数据科技有限公司", "北京数据科技有限公司有几份合同"   # user's own question, no space
+    assert _classify(v, q) == ("exact_phrase", 1.0)
+
+
+def test_cjk_short_value_is_not_high_confidence():
+    v, q = "数据", "北京数据科技有限公司有多少份合同"            # 2 CJK common word
+    assert not _is_high_conf(_classify(v, q))
+
+
+def test_cjk_partial_value_is_not_high_confidence():
+    v, q = "上海云图信息技术", "上海云图 有多少工单"              # only part of the name present
+    assert not _is_high_conf(_classify(v, q))
+
+
+def test_cjk_scrambled_value_is_not_high_confidence():
+    v, q = "上海云图信息技术", "技术信息图云海上 有多少工单"        # same chars, wrong order
+    assert not _is_high_conf(_classify(v, q))
+
+
+def test_cjk_nfkc_fullwidth_normalisation():
+    v, q = "ＡＢＣ数据服务", "abc数据服务公司有多少合同"           # fullwidth+CJK vs halfwidth
+    assert _classify(v, q) == ("exact_phrase", 1.0)
+
+
+# --- English tiers must be unchanged (no substring rule leaks into English) ----------------------
+
+def test_english_exact_keyword_unchanged():
+    assert _classify("Widget", "do we sell Widget") == ("exact_keyword", 1.0)
+
+
+def test_english_exact_phrase_unchanged():
+    assert _classify("Acme Corp", "invoices for Acme Corp today") == ("exact_phrase", 1.0)
+
+
+def test_english_token_match_unchanged():
+    assert _classify("Acme Corp", "show the acme account")[0] == "token_match"
+
+
+def test_english_fuzzy_unchanged():
+    assert _classify("Widget", "orders for Widgett")[0] == "fuzzy"
+
+
+def test_english_substring_is_not_a_phrase_hit():
+    # 'Wid' is a substring of 'Widget' but English has NO substring rule -> not high-conf
+    assert not _is_high_conf(_classify("Wid", "do we sell Widget"))
 
 
 # --- bulk partial-failure detection (pure function; no ES) --------------------------------------
