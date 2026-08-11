@@ -71,3 +71,28 @@ def test_token_or_fuzzy_value_alone_does_not_admit():
                         k=5, value_backend=_backend("Acme Widget"))
     assert res.candidates == []
     assert any(e.event == "admission_rejected" for e in res.stage_events)
+
+
+def test_value_query_routes_only_to_value_channel_and_records_provenance():
+    # the value is in value_query (the original question), NOT in the enhanced `question`
+    res = run_retrieval("some unrelated enhanced rewrite", _vtables(),
+                        RetrievalConfig.value_ablation(), k=5, value_backend=_backend("Widget"),
+                        value_query="do we sell Widget")
+    val = [s for s in res.signals if s.channel == "value"]
+    assert val and val[0].table == "product" and val[0].match_type == "exact_keyword"
+    assert val[0].query_term == "do we sell Widget"       # provenance = the value_query actually used
+
+
+def test_value_query_none_falls_back_to_question():
+    res = run_retrieval("do we sell Widget", _vtables(), RetrievalConfig.value_ablation(),
+                        k=5, value_backend=_backend("Widget"), value_query=None)
+    val = [s for s in res.signals if s.channel == "value"]
+    assert val and val[0].query_term == "do we sell Widget"
+
+
+def test_enhanced_only_entity_never_reaches_value_channel():
+    # `question` (enhanced) fabricates 'Gadget'; value_query (original) does not mention it, so the
+    # indexed 'Gadget' must produce NO value signal (a model-introduced entity cannot admit).
+    res = run_retrieval("do we sell Gadget", _vtables(), RetrievalConfig.value_ablation(),
+                        k=5, value_backend=_backend("Gadget"), value_query="how many things")
+    assert not [s for s in res.signals if s.channel == "value"]

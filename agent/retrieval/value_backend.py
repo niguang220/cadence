@@ -9,10 +9,38 @@ exact_keyword > exact_phrase > token_match > fuzzy (the same order aggregate.py 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Protocol
 
 _BUCKET = {"exact_keyword": 4, "exact_phrase": 3, "token_match": 2, "fuzzy": 1}
+
+_MIN_CJK_CODEPOINTS = 4                                    # floor: 2-3 char common words never qualify
+
+
+def _is_cjk(ch: str) -> bool:
+    o = ord(ch)
+    return (0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF
+            or 0x20000 <= o <= 0x2A6DF or 0x2A700 <= o <= 0x2EBEF)
+
+
+def _norm_no_ws(s: str) -> str:
+    """NFKC + casefold, then drop ONLY Unicode whitespace (never other punctuation). Whitespace is
+    the single delimiter the LLM rewrite adds/removes around a CJK entity, so ignoring it — and
+    nothing else — is what makes a whitespace-insensitive contiguous-substring match sound."""
+    n = unicodedata.normalize("NFKC", s).casefold()
+    return "".join(ch for ch in n if not ch.isspace())
+
+
+def _cjk_contiguous_match(value: str, question: str) -> bool:
+    """A LONG CJK value that appears as a whitespace-insensitive CONTIGUOUS substring of the question
+    is a high-confidence phrase hit. Deliberately narrow: >=4 CJK code points, the FULL normalized
+    value must be contiguous (no partial / scrambled / unigram-overlap), and only whitespace is
+    ignored (no fuzzy, no punctuation stripping). English values (0 CJK) never reach this."""
+    if sum(1 for ch in value if _is_cjk(ch)) < _MIN_CJK_CODEPOINTS:
+        return False
+    nv = _norm_no_ws(value)
+    return bool(nv) and nv in _norm_no_ws(question)
 
 
 @dataclass(frozen=True)
@@ -120,6 +148,8 @@ def _classify(value: str, question: str) -> tuple[str, float] | None:
             return ("exact_keyword", 1.0)
     elif _has_run(qtok, vtok):                             # multi-token value as a consecutive run
         return ("exact_phrase", 1.0)
+    if _cjk_contiguous_match(value, question):            # long CJK value as whitespace-insensitive substring
+        return ("exact_phrase", 1.0)                       # whitespace tokenisation splits CJK; this is the phrase peer
     overlap = set(vtok) & qset
     if overlap:
         return ("token_match", len(overlap) / len(set(vtok)))

@@ -46,8 +46,14 @@ def _value_backend_for(config: RetrievalConfig, injected):
 
 
 def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *, k: int,
-                  metric_hits=None, dense_backend=None, value_backend=None) -> RetrievalResult:
+                  metric_hits=None, dense_backend=None, value_backend=None,
+                  value_query: str | None = None) -> RetrievalResult:
+    """``question`` drives lexical + dense (the graph passes the enhanced rewrite here). ``value_query``
+    drives ONLY entity-value linking; the graph passes the ORIGINAL user question so a model-invented
+    entity in the enhanced rewrite can never become a value admission. ``value_query=None`` falls back
+    to ``question`` (direct callers and existing tests are unaffected)."""
     metric_hits = metric_hits or []
+    value_query = question if value_query is None else value_query
     missing = _missing_capabilities(config)
     if missing:
         raise UnsupportedRetrievalCapability(missing)
@@ -62,7 +68,7 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
         signals, events = [], []
     else:
         candidates, selection, signals, events, rejected = _rrf_fusion(
-            question, tables, config, matches, dense_backend, value_backend)
+            question, tables, config, matches, dense_backend, value_backend, value_query)
         if rejected:
             return RetrievalResult(config_name=config.name, signals=signals, candidates=[],
                                    metric_matches=matches, selection=selection,
@@ -89,11 +95,14 @@ def _closure(config, tables, anchors, events):
     return plan
 
 
-def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=None):
+def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=None,
+                value_query=None):
     """Channels + aggregate + admission gate + weighted_rrf + protected anchors + selector.
-    NO relation planning here (that's ``_closure``). Returns
+    NO relation planning here (that's ``_closure``). ``question`` feeds lexical/dense; ``value_query``
+    feeds ONLY the value channel (defaults to ``question``). Returns
     ``(candidates, selection, signals, events, rejected)``; on admission rejection ``rejected``
     is True and ``candidates``/``selection`` are the empty/no-anchor placeholders."""
+    value_query = question if value_query is None else value_query
     events: list[RetrievalStageEvent] = []
     signals = []
     channel_results = {}
@@ -119,7 +128,7 @@ def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=
     if config.value_backend == "es":
         try:
             vb = _value_backend_for(config, value_backend)
-            value_signals = ValueChannel(vb).signals(question, tables)
+            value_signals = ValueChannel(vb).signals(value_query, tables)   # original question, not enhanced
             signals += value_signals
             if value_signals:
                 channel_results["value"] = aggregate("value", value_signals)

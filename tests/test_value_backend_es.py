@@ -73,6 +73,35 @@ def test_es_upsert_raises_on_partial_bulk_failure(es_backend):
         es.indices.delete(index=idx, ignore_unavailable=True)
 
 
+def test_fake_es_parity_on_merged_cjk_value(es_backend):
+    """A long CJK company value merged into the question (no whitespace — the shape query_enhance
+    produced) must resolve to the SAME owner/tier/rank on real ES and the fake: ES recalls via
+    per-character unigrams, then the shared _classify assigns the exact_phrase tier on both."""
+    import pathlib
+    import tempfile
+
+    from agent.db.build_value_db import build as build_value_db
+    from agent.db.introspect import introspect
+    from agent.retrieval.value_index import _collect_docs
+    from agent.retrieval.value_policy import resolve_searchable_columns
+    with tempfile.TemporaryDirectory() as wd:
+        db = build_value_db(pathlib.Path(wd) / "v.db")
+        allowed = resolve_searchable_columns(introspect(db))
+        docs = _collect_docs(db, allowed)
+    es_backend.upsert(docs)
+    es_backend.prune({d.document_id for d in docs})
+    fake = FakeValueBackend()
+    fake.upsert(docs)
+    q = "上海云图信息技术有限公司有多少个未解决的工单"          # merged, no space (the bad rewrite)
+
+    def owner_hits(hits):                                       # ordered -> compares owner, tier AND rank
+        return [(h.value, h.match_type) for h in hits if h.table == "company"]
+
+    es_hits = owner_hits(es_backend.search(q, allowed=allowed))
+    assert es_hits == owner_hits(fake.search(q, allowed=allowed))
+    assert ("上海云图信息技术", "exact_phrase") in es_hits
+
+
 def test_fake_and_es_agree_on_owner_and_tier(es_backend):
     _reindex(es_backend)
     fake = FakeValueBackend()
