@@ -34,6 +34,25 @@ def _answer(rows, *, sql="SELECT 42", ok=True, trace=None, usage=None, clarifica
         retrieval_result=retrieval_result if retrieval_result is not None else _rr("current_hybrid"))
 
 
+def test_value_hit_tier_recorded_from_value_signals():
+    from agent.retrieval.contracts import RetrievalSignal
+    rr = _rr("dense_value")
+    rr.signals = [RetrievalSignal(channel="value", target_type="value", table="account",
+                                  column="name", query_term="q", raw_score=1.0,
+                                  match_type="exact_phrase", matched_value="Acme"),
+                  RetrievalSignal(channel="lexical", target_type="table", table="subscription",
+                                  column=None, query_term="q", raw_score=1.0, match_type="alias")]
+    r = record_run(_case(), _answer([(42,)], retrieval_result=rr), gold_rows=[(42,)],
+                   semantic_layer=False, config=RetrievalConfig.dense_value(), k=5, repeat_index=0)
+    assert r.value_hit is True and r.value_hit_tier == "exact_phrase"
+
+
+def test_no_value_hit_when_no_value_signals():
+    r = record_run(_case(), _answer([(42,)]), gold_rows=[(42,)], semantic_layer=False,
+                   config=RetrievalConfig.current_hybrid(), k=5, repeat_index=0)
+    assert r.value_hit is False and r.value_hit_tier is None
+
+
 def test_exec_match_true_when_rows_match_gold():
     r = record_run(_case(), _answer([(42,)]), gold_rows=[(42,)], semantic_layer=True,
                    config=RetrievalConfig.current_hybrid(), k=5, repeat_index=0)

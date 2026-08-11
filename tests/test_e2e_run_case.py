@@ -63,13 +63,14 @@ def test_run_case_raises_on_broken_gold_sql(saas_db):
                 config=RetrievalConfig.current_hybrid(), k=5, repeat_index=0)
 
 
-def test_run_case_forwards_config_and_k(saas_db, monkeypatch):
+def test_run_case_forwards_config_k_and_value_backend(saas_db, monkeypatch):
     import evalharness.e2e_eval as ee
     seen = {}
     cfg = RetrievalConfig.current_hybrid()
+    sentinel_backend = object()
 
-    def spy(db, q, *, model, tables, semantic_layer, k, retrieval_config):
-        seen.update(k=k, retrieval_config=retrieval_config)
+    def spy(db, q, *, model, tables, semantic_layer, k, retrieval_config, value_backend=None):
+        seen.update(k=k, retrieval_config=retrieval_config, value_backend=value_backend)
         return _fake_answer_with_rr(cfg.name)
 
     monkeypatch.setattr(ee, "run_agent", spy)
@@ -77,5 +78,7 @@ def test_run_case_forwards_config_and_k(saas_db, monkeypatch):
     case = SaasMetricsCase(id="cnt", category="control", metric="count",
                            question="how many subscriptions?",
                            gold_sql="SELECT COUNT(*) FROM subscription", required_tables=["subscription"])
-    ee.run_case(saas_db, tables, case, object(), semantic_layer=False, config=cfg, k=7, repeat_index=2)
+    ee.run_case(saas_db, tables, case, object(), semantic_layer=False, config=cfg, k=7,
+                repeat_index=2, value_backend=sentinel_backend)
     assert seen["k"] == 7 and seen["retrieval_config"] is cfg
+    assert seen["value_backend"] is sentinel_backend           # value backend reaches the agent

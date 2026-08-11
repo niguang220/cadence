@@ -47,6 +47,17 @@ class EvalRecord:
     selection_recall: float | None = None
     context_recall: float | None = None
     retrieval_stage_events: list[dict] = field(default_factory=list)
+    value_hit: bool = False                 # did the value channel surface a hit for this run?
+    value_hit_tier: str | None = None       # its best tier (exact_keyword > exact_phrase > token > fuzzy)
+
+
+_VALUE_TIER_RANK = {"exact_keyword": 4, "exact_phrase": 3, "token_match": 2, "fuzzy": 1}
+
+
+def _best_value_tier(retrieval_result) -> str | None:
+    value = [s for s in retrieval_result.signals if s.channel == "value"]
+    best = max(value, key=lambda s: _VALUE_TIER_RANK.get(s.match_type, 0), default=None)
+    return best.match_type if best else None
 
 
 def _first_try_valid(trace: list[dict]) -> bool:
@@ -150,17 +161,22 @@ def record_run(case, result, gold_rows, *, semantic_layer: bool, config: Retriev
         selection_recall=recall["selection_recall"],
         context_recall=recall["context_recall"],
         retrieval_stage_events=[dict(vars(e)) for e in rr.stage_events],
+        value_hit=_best_value_tier(rr) is not None,
+        value_hit_tier=_best_value_tier(rr),
     )
 
 
 def run_case(db_path, tables, case, model, *, semantic_layer: bool, config: RetrievalConfig, k: int,
-             repeat_index: int) -> EvalRecord:
-    """Execute the gold SQL (fixture self-check), run the full agent, score one record."""
+             repeat_index: int, value_backend=None) -> EvalRecord:
+    """Execute the gold SQL (fixture self-check), run the full agent, score one record. ``value_backend``
+    is forwarded to the agent (a value config needs a real ES backend; a value-blind config passes
+    None)."""
     gold = run_query(db_path, case.gold_sql, tables=tables)
     if not gold.ok:
         raise RuntimeError(f"{case.id}: gold_sql failed to execute: {gold.error}")
     result = run_agent(db_path, case.question, model=model, tables=tables,
-                       semantic_layer=semantic_layer, k=k, retrieval_config=config)
+                       semantic_layer=semantic_layer, k=k, retrieval_config=config,
+                       value_backend=value_backend)
     return record_run(case, result, gold.rows, semantic_layer=semantic_layer, config=config,
                       k=k, repeat_index=repeat_index)
 
