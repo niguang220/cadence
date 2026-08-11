@@ -1,6 +1,6 @@
 name: value-e2e (real, manual)
 
-# Real, PAID full-agent value E2E (100 runs, real Elasticsearch + real DeepSeek). MANUAL ONLY and
+# Real, PAID full-agent value E2E (280 runs, real Elasticsearch + real DeepSeek). MANUAL ONLY and
 # MAIN ONLY, so a feature branch can never reach the real-eval environment secret. Never triggered
 # by pull_request / push / label. The DEEPSEEK_API_KEY lives in the `real-eval` GitHub Environment;
 # add a required reviewer there so every paid run needs a human approval.
@@ -63,7 +63,7 @@ jobs:
             echo "waiting for elasticsearch ($i)"; sleep 5
           done
           echo "elasticsearch did not become ready"; exit 1
-      - name: Run the real full-agent value E2E (4 configs x 5 positives x 5 repeats = 100 runs)
+      - name: Run the real full-agent value E2E (4 configs x (10 primary + 4 control) x 5 repeats = 280 runs)
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           CADENCE_ES_URL: http://localhost:9200

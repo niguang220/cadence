@@ -36,3 +36,15 @@ def test_goldless_negative_recall_is_none():
     m = rank_sensitive_metrics(_rr([]), [])
     assert m["candidate_recall"] is None and m["fusion_at_5_recall"] is None
     assert m["candidate_precision"] is None and m["candidate_count"] == 0
+
+
+def test_selection_and_context_recall():
+    # selection = first 2 (company, ticket); context = first 3 (company, ticket, x)
+    m = rank_sensitive_metrics(_rr(["company", "ticket", "x", "y", "z", "w"]), ["company", "x"])
+    assert m["selection_recall"] == 0.5      # 'company' selected, 'x' only a candidate
+    assert m["context_recall"] == 1.0        # both in the one-hop context set
+
+
+def test_goldless_selection_context_recall_is_none():
+    m = rank_sensitive_metrics(_rr(["a", "b", "c"]), [])
+    assert m["selection_recall"] is None and m["context_recall"] is None
