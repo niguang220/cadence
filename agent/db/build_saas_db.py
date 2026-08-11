@@ -498,8 +498,50 @@ _ALL_INVOICES, _ALL_RECOGNITIONS = _build_all_invoices_and_recognition()
 
 # ── public builder ─────────────────────────────────────────────────────────────
 
-def build(path: str | Path = DB_PATH) -> Path:
-    """Build the SaaS analytics DB at *path*. Replaces any existing file."""
+# Same-domain CONFOUNDER tables (retrieval diagnostic only): near-synonyms of the metric tables that a
+# ranker will genuinely confuse with them (subscription_history vs subscription, mrr_snapshot vs
+# mrr_movement, ...). They add distractors so retrieval is no longer saturated at 8 <= candidate_k(15),
+# WITHOUT touching the original 8 tables / their data / any gold SQL. NO searchable column here — the
+# value channel must stay inert on the saas domain. Off by default; only build(confounders=True) adds them.
+_CONFOUNDER_SCHEMA = """
+CREATE TABLE subscription_history (id INTEGER PRIMARY KEY, subscription_id INTEGER REFERENCES subscription(subscription_id),
+    changed_on TEXT, old_plan_id INTEGER REFERENCES plan(plan_id), new_plan_id INTEGER REFERENCES plan(plan_id));
+CREATE TABLE subscription_addon (id INTEGER PRIMARY KEY, subscription_id INTEGER REFERENCES subscription(subscription_id),
+    addon_name TEXT, monthly_amount REAL);
+CREATE TABLE plan_version (id INTEGER PRIMARY KEY, plan_id INTEGER REFERENCES plan(plan_id), version INTEGER, effective_on TEXT);
+CREATE TABLE plan_feature (id INTEGER PRIMARY KEY, plan_id INTEGER REFERENCES plan(plan_id), feature_name TEXT);
+CREATE TABLE invoice_line_item (id INTEGER PRIMARY KEY, invoice_id INTEGER REFERENCES invoice(invoice_id), description TEXT, amount REAL);
+CREATE TABLE payment_attempt (id INTEGER PRIMARY KEY, invoice_id INTEGER REFERENCES invoice(invoice_id), status TEXT, attempted_on TEXT);
+CREATE TABLE billing_adjustment (id INTEGER PRIMARY KEY, invoice_id INTEGER REFERENCES invoice(invoice_id), amount REAL, reason TEXT);
+CREATE TABLE account_contact (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES account(account_id), contact_name TEXT, role TEXT);
+CREATE TABLE usage_event_daily (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES account(account_id), day TEXT, event_count INTEGER);
+CREATE TABLE mrr_snapshot (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES account(account_id), snapshot_on TEXT, mrr REAL);
+CREATE TABLE revenue_schedule (id INTEGER PRIMARY KEY, subscription_id INTEGER REFERENCES subscription(subscription_id), period TEXT, amount REAL);
+CREATE TABLE user_session (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES "user"(user_id), started_at TEXT, duration_min INTEGER);
+"""
+
+# Minimal, FK-valid seed (parents 1..3 all exist). Data is irrelevant to every gold SQL (which reads
+# only the original 8 tables); rows exist so schema introspection has sample values for the distractors.
+_CONFOUNDER_SEED = {
+    "subscription_history": [(i, i, "2025-03-01", 1, 2) for i in range(1, 4)],
+    "subscription_addon": [(i, i, "Extra seats", 20.0) for i in range(1, 4)],
+    "plan_version": [(i, i, 2, "2025-01-01") for i in range(1, 4)],
+    "plan_feature": [(i, i, "sso") for i in range(1, 4)],
+    "invoice_line_item": [(i, i, "Subscription fee", 99.0) for i in range(1, 4)],
+    "payment_attempt": [(i, i, "succeeded", "2025-02-01") for i in range(1, 4)],
+    "billing_adjustment": [(i, i, -5.0, "credit") for i in range(1, 4)],
+    "account_contact": [(i, i, "Contact", "billing") for i in range(1, 4)],
+    "usage_event_daily": [(i, i, "2025-06-30", 10) for i in range(1, 4)],
+    "mrr_snapshot": [(i, i, "2025-06-30", 100.0) for i in range(1, 4)],
+    "revenue_schedule": [(i, i, "2025-Q2", 300.0) for i in range(1, 4)],
+    "user_session": [(i, i, "2025-06-30", 15) for i in range(1, 4)],
+}
+
+
+def build(path: str | Path = DB_PATH, *, confounders: bool = False) -> Path:
+    """Build the SaaS analytics DB at *path*. Replaces any existing file. ``confounders=True`` additionally
+    creates same-domain distractor tables for the retrieval ranking diagnostic — the original 8 tables,
+    their data, and every gold SQL result are untouched."""
     path = Path(path)
     if path.exists():
         path.unlink()
@@ -517,6 +559,12 @@ def build(path: str | Path = DB_PATH) -> Path:
         cur.executemany("INSERT INTO activity_event VALUES(?,?,?,?,?)", _ALL_EVENTS)
         cur.executemany("INSERT INTO invoice VALUES(?,?,?,?,?,?)", _ALL_INVOICES)
         cur.executemany("INSERT INTO revenue_recognition VALUES(?,?,?,?)", _ALL_RECOGNITIONS)
+
+        if confounders:
+            conn.executescript(_CONFOUNDER_SCHEMA)
+            for table, rows in _CONFOUNDER_SEED.items():
+                placeholders = ",".join("?" * len(rows[0]))
+                cur.executemany(f'INSERT INTO "{table}" VALUES({placeholders})', rows)
 
         conn.commit()
 
