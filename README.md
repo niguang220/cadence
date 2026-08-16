@@ -1,272 +1,201 @@
-# Cadence
+# Cadence — reliability-first NL-to-SQL agent
 
 [![CI](https://github.com/niguang220/cadence/actions/workflows/ci.yml/badge.svg)](https://github.com/niguang220/cadence/actions/workflows/ci.yml)
 
-> **A reliability-first natural-language-to-SQL data agent — and the evaluation harness that
-> measures it, and is willing to reject its own regressions.**
+Cadence is a Python/LangGraph data agent for answering questions over a governed SaaS
+database. It combines model-generated SQL with deterministic safety, governance, bounded
+repair, and an evaluation harness that measures both improvements and regressions.
 
-Most NL→SQL demos ask you to *trust* the model. Cadence is built so you can *verify* it:
-deterministic guardrails you can audit, a pipeline that refuses (with a reason) instead of
-guessing, and a self-built harness that measures how reliable selected parts are — including
-where they aren't.
+This repository is an engineering testbed, not a production analytics platform. Its current
+focus is a narrower question: **how can an NL-to-SQL system expose and measure the ways it can
+return a convincing but wrong number?**
 
-Cadence continues my earlier **DataPilot** project and reuses its DB-agnostic core; the
-planner-driven orchestration, the retrieval pipeline, the Docker sandbox, and every
-reliability surface described below were built here. The planner/gate topology draws on ideas
-from reading Alibaba's `spring-ai-alibaba/DataAgent` — chiefly the separation of schema recall
-from feasibility gating. Python / LangGraph.
-
----
-
-## The problem it takes seriously
-
-For a data agent, the dangerous failure isn't a missing answer — it's a **confident wrong
-number**. A KPI that looks reasonable but silently dropped a `JOIN` or a `WHERE` clause ends
-up in a weekly report and drives a decision. In 2026, capable agents are not scarce; agents
-whose reliability you can actually *measure* are. Cadence is an attempt to move "can I trust
-this number?" from faith toward measurement.
-
-## What it is (and isn't)
-
-- **It is:** a reliability-first data-agent engineering testbed on a demo SaaS-metrics
-  schema, with a first-class evaluation and reliability harness.
-- **It isn't (yet):** a multi-tenant, production enterprise data platform. There is no
-  cross-warehouse identity, row-level access control, or schema/version lifecycle. Those
-  boundaries are known and deliberate — see [Status & roadmap](#status--roadmap).
-
-## How it works
-
-The agent is a bounded LangGraph state machine. The design choice that matters: **the
-enforceable reliability invariants — read-only execution, PII-column/result governance
-routing, bounded retries, and the sandbox boundary — come from a deterministic backbone that
-never depends on the LLM behaving, so they can't inherit the model's blind spots.**
-Determinism makes these invariants auditable; it does not by itself make every gating
-*decision* correct — that's what the harness measures. Five stages *are* LLM-backed (query
-understanding, planning, SQL generation, the semantic-consistency judge, and Python-program
-generation); the rest is auditable deterministic code.
-
-```mermaid
-flowchart TB
-  Q([Question]) --> INT{Intent gate}
-  INT -->|out of scope| REF[Refuse, with a reason]
-  INT -->|data question| CLR{Ambiguous?}
-  CLR -->|yes| ASK[Ask the user to clarify - HITL]
-  CLR -->|no| ENH[Query enhance]
-  ENH --> RECALL[Schema recall + table relations]
-  RECALL --> FEAS{Feasibility gate}
-  FEAS -->|no relevant tables| REF
-  FEAS -->|ok| PLAN[Plan the steps]
-  PLAN --> GEN[Generate SQL]
-  GEN --> SAFE[Safety gate]
-  SAFE --> EXEC[Read-only execute]
-  EXEC --> GOV{PII column / result governance}
-  GOV -->|blocked| REF
-  GOV -->|ok| VAL{Structural validate}
-  VAL -->|error| GEN
-  VAL -->|ok| JUDGE{Semantic-consistency judge}
-  JUDGE -->|mismatch| GEN
-  JUDGE -->|ok| STEP{More planned steps?}
-  STEP -->|no| ANS([Answer])
-  STEP -->|yes: Python step| PYGEN[Generate Python]
-  PYGEN --> PYEXEC[Docker sandbox execute + parse]
-  PYEXEC --> ANS
-
-  classDef det fill:#e6f0ff,stroke:#4a78c2,color:#111;
-  classDef llm fill:#fff0e6,stroke:#c2884a,color:#111;
-  class INT,CLR,RECALL,FEAS,SAFE,EXEC,GOV,VAL,STEP,PYEXEC det;
-  class ENH,PLAN,GEN,JUDGE,PYGEN llm;
-```
-
-<sub>Blue = deterministic, auditable rules · Orange = LLM-backed. Simplified: the graph also
-drives a bounded repair loop. A plan is a single SQL step, optionally followed by one Python
-analysis step.</sub>
-
-Key design choices, each meant to be defensible rather than impressive:
-
-- **Deterministic skeleton.** The SQL safety gate (read-only only; blocks `ATTACH`/`PRAGMA`
-  side effects), PII-column/result governance, and the execution-match oracle are plain code.
-  The SQL and Python they check are model-generated, but **the checks, limits, and sandbox
-  boundary don't rely on the model behaving.**
-- **Reasoned refusal + bounded self-correction.** Out-of-scope or unanswerable questions are
-  refused with a reason, not hallucinated; a failed SQL is fed back for a bounded repair
-  loop; ambiguous questions trigger a clarification (human-in-the-loop).
-- **Governance topology.** A result blocked by PII-column/result governance can never reach
-  the LLM judge or the Python step — the graph routes around it structurally.
-- **The LLM judge is explicitly a *soft* layer.** It shares a model (and therefore blind
-  spots) with the generator, so it is not treated as a trusted oracle — it's a best-effort
-  additional defense, and the harness measures how soft it actually is.
-
-## The differentiator: a harness that can reject its own changes
-
-Cadence's headline is not the agent — it's the **self-built evaluation & reliability
-harness**, and the engineering discipline around it.
-
-Reliability is decomposed into three quantifiable surfaces:
-
-| Surface | What it evaluates | Tier |
-| --- | --- | --- |
-| **gate** | Routing decisions (refuse vs. proceed), per-gate precision/recall | Deterministic · CI |
-| **consistency** | The semantic-consistency judge: catch-rate on wrong SQL, false-positive-rate on correct SQL | Real-API · manual |
-| **sandbox** | The Python analysis step: does the generated program compute the right answer | Real-API + Docker · manual |
-
-The methodology is the point:
-
-- **Adversarial cases *paired with clean controls*** — so a high catch-rate can't hide the
-  fact that the check is just trigger-happy.
-- **Deterministic "teeth" kept separate from measured rates** — a hand-labeled fixture that
-  matches the code is `by_construction`, never reported as a measured accuracy.
-- **Provenance on every real run** — golden-set SHA-256, per-case outcomes, model, timestamp
-  — so two runs are comparable.
-- **Pre-registration and negative results allowed.** A change is proposed, acceptance criteria
-  are locked, fixtures are frozen and hashed, *then* it's measured.
-
-This last point produced the work I'm most proud of: two plausible, locally-good-looking
-improvements to the judge (feeding it a schema catalog; tightening its prompt) were both
-**rejected by the pre-registered evaluation** — the catalog showed no measured value, and the
-tightening bought recall at the cost of falsely refusing a legitimate query, which the clean
-controls caught. Both were reverted; the judge prompt is byte-identical to the baseline. The
-conditions, fixture hash, sample size, and conclusions are recorded in
-[`docs/reliability/2026-07-22-judge-entity-experiment.md`](docs/reliability/2026-07-22-judge-entity-experiment.md).
-**Building a mechanism that can veto your own plausible ideas is closer to real reliability
-engineering than adding another node.**
-
-## Measured: a full-agent E2E with failure attribution
-
-The harness above measures components. This one measures the whole agent, against real
-infrastructure, and attributes each failure to a stage.
-
-A rank-sensitive value-linking golden was frozen before running — spec SHA
-`f9c4d8cb140a4b109b2a388798d117a0fa9cb983fa126c78d5333df65a9a1ebb`, covering case id,
-question, gold SQL and required tables, so the golden cannot silently drift under the
-numbers. 10 primaries × 4 retrieval configs × 5 repeats, plus 4 controls = **280 records**
-against **real Elasticsearch 8.19 and real DeepSeek**.
-
-**Read the numbers with the fixture in mind.** The set was deliberately built to be
-*non-saturated* — cases where neither lexical nor dense retrieval has a bridge to the answer.
-It measures the value channel's marginal contribution on its hardest ground. It is not an
-overall accuracy score, and a number like 60% means something entirely different here than it
-would on a benchmark chosen to be representative.
-
-| config | exec_match | candidate recall | Fusion@5 |
-| --- | --- | --- | --- |
-| lexical | 28% | 0.20 | 0.20 |
-| dense (rrf) | 24% | 0.40 | 0.30 |
-| lexical + value | 48% | 0.60 | 0.60 |
-| dense + value | **60%** | **0.80** | **0.75** |
-
-What the harness separated — which is the actual point:
-
-- **Value converts retrieval misses into execution wins** in three categories, including one
-  combo-only case: value alone 0/5, dense alone 0/5, the two together 5/5.
-- **Two Chinese cases returned an empty candidate set — confirmed root cause, now fixed.**
-  `zh_shyuntu_tickets` and `zh_tianhe_contracts` sat at candidate recall 0.00 under every
-  config, so the agent refused rather than guessed. The investigation took three turns, kept
-  honestly: (1) an initial "real-ES CJK tokenisation gap" hypothesis was **disproved** — real
-  Elasticsearch 8.19 tokenises those names and returns hits identical to `FakeValueBackend`;
-  (2) a **separate** real defect surfaced and was fixed (`ElasticsearchValueBackend` never
-  checked `_bulk` per-item `errors`, so a partial ingestion failure could silently drop
-  documents) — but a targeted 40-run proved it was **not** the cause here; (3) that 40-run,
-  through the full agent, finally **localised** it. The `query_enhance` LLM rewrite drops the
-  whitespace after the Chinese entity (`上海云图信息技术 …` → `上海云图信息技术有限公司…`), and
-  value retrieval was consuming that *enhanced* question. `_classify`'s `exact_keyword` tier
-  depends on whitespace token isolation, so the merged name stopped matching; the value signal
-  vanished, the admission gate then suppressed dense, and the whole candidate set went empty.
-  Fix: value linking now consumes the **original, user-provided** question (lexical/dense keep
-  the enhanced one), and long CJK values match as whitespace-insensitive contiguous substrings
-  (`exact_phrase`). No trigger left unknown, and no model-introduced entity can drive a value
-  admission.
-- **Retrieval-fine / generation-fails** cases isolated as a generation problem (recall 1.0,
-  wrong SQL every repeat), out of scope for anything retrieval-side.
-- Controls: 80 runs, **zero PII leak**, zero silent backend fallback, and a full-blob scan of
-  the artifacts clean of raw entity values.
-
-**The recommendation this produced was to ship nothing.** The shipping preset was never in
-the comparison set, so the run cannot claim `dense+value` beats it; the exec-level lift is
-real but narrow; and the wins concentrate in exactly the niche the value channel was built
-for. The report proposes a head-to-head canary instead of a default flip, and the production
-default is unchanged.
-[Full report with per-case results, stage events, and cost](docs/reliability/2026-08-11-stage3a-value-e2e-280.md).
-
-## Running it
+## Try it
 
 ```bash
-# install (editable, with dev extras)
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
-# run the agent on a question (needs DEEPSEEK_API_KEY in the environment / a local .env)
-python -m agent "How many active subscriptions do we have per region?"
+# No LLM or API key. The embedding model may download on first use.
+cadence retrieve "revenue by plan"
 
-# retrieval-only health check: no LLM / API key required
-# (first use may download the embedding model, then it's cached)
-python -m agent --retrieval-only "revenue by plan"
+# Full agent. Requires DEEPSEEK_API_KEY.
+cadence ask --semantic-layer "How many active subscriptions do we have per region?"
 
-# the deterministic scorecard tier: zero API, zero Docker, CI-enforced
-python -m evals.scorecard --tier deterministic
-
-# the full two-tier scorecard (needs DEEPSEEK_API_KEY + local Docker sandbox image)
-docker build -t cadence-sandbox:latest - < Dockerfile.sandbox
-python -m evals.scorecard --tier all
-
-# tests (service-free: LLM and Docker are faked in CI)
+# Service-free test suite.
 pytest -q
+```
 
-# a local, reliability-forward demo (Streamlit): shows the SQL, the pipeline trace, and
-# the semantic layer ON vs OFF -- all from real agent runs, nothing hard-coded
+For the Streamlit demo:
+
+```bash
 pip install -e ".[demo]"
 streamlit run demo/app.py
 ```
 
-## Example
+The demo shows the generated SQL, execution result, pipeline trace, usage, governance
+decisions, and semantic-layer ON/OFF comparison. It runs the real agent; the answers are not
+hard-coded.
 
-A real session against the built-in demo schema (`python -m agent "<question>"`):
+The original module form remains compatible:
 
-```text
-$ python -m agent "What is our total MRR from active subscriptions?"
-tables: ['subscription', 'mrr_movement', 'revenue_recognition', 'invoice', 'plan']
-SQL:    SELECT SUM(mrr) AS total_mrr
-        FROM subscription
-        WHERE (ended_on IS NULL OR ended_on >= date('now', 'start of month'))
-          AND started_on < date('now', 'start of month', '+1 month');
-answer: total_mrr: 2328.0
-
-$ python -m agent "What's the weather in Singapore today?"
-tables: []
-answer: No tables look relevant to this question.
+```bash
+python -m agent "How many active subscriptions do we have per region?"
+python -m agent --retrieval-only "revenue by plan"
 ```
 
-The first question is understood, translated to safe read-only SQL, executed, and answered.
-The second is outside what the data can answer — so the agent refuses with a reason instead
-of inventing a number.
+## What is implemented
 
-## Status & roadmap
+- A bounded LangGraph workflow for intent routing, clarification, schema retrieval, planning,
+  SQL generation, execution, validation, repair, and optional Python analysis.
+- Read-only SQL enforcement with both AST checks and a SQLite authorizer.
+- PII column and result governance, routed so blocked data cannot reach later LLM or Python
+  stages.
+- A Docker sandbox for generated Python analysis.
+- A governed metric registry for definitions such as MRR and active users.
+- Lexical, dense, and Elasticsearch-backed value-retrieval channels behind typed contracts.
+- Deterministic and real-API evaluation tiers with frozen fixtures, per-run provenance, paired
+  controls, and failure attribution.
 
-- **314 tests** pass. Service-free unit tests (faked LLM/Docker) run in CI; the catch-rate /
-  match-rate numbers are only produced by the manual real-API tier.
-- Real-API scorecards are honest **single-run point estimates on a small demo schema** —
-  recorded with provenance, deliberately *not* dressed up as stable capabilities.
+The default runtime and CLI use `RetrievalConfig.current_hybrid()` (lexical + in-memory dense,
+legacy min-max fusion, one-hop relations). The value channel and RRF candidate are implemented
+and evaluated, but are opt-in and have **not** replaced the default.
 
-Next, in priority order:
+Available CLI presets are `current_hybrid`, `lexical_baseline`, `rrf_hybrid`,
+`value_ablation`, and `dense_value`. `cadence retrieve ... --json` exposes the full typed
+retrieval result without calling an LLM.
 
-1. **A head-to-head canary against the shipping preset** — `current_hybrid + value` measured
-   against `current_hybrid` on the same frozen set. That comparison, not the one already run,
-   is what a default flip would actually require. The two follow-ups the E2E generated are now
-   closed: the empty-candidate root cause was localised to query-ownership (value linking was
-   reading the LLM-enhanced question) and fixed — value now reads the original question and
-   long CJK values match as contiguous substrings; and the separate ingestion defect (unchecked
-   ES bulk errors) is fixed too. No ES analyzer / n-gram work was warranted.
-3. **External validity** — run the E2E path on a frozen, auditable slice of a public
-   benchmark (BIRD / Spider), instead of only in-repo fixtures.
-4. **A verifiable semantic layer** — extend the existing metric registry
-   (`agent/semantic_layer.py`) into a declarative entity/relationship/metric contract, so an
-   alias like `customer → account` comes from a manifest rather than a model's guess.
+## How a request flows
 
-## Tech
+```mermaid
+flowchart LR
+  Q[Question] --> I{Intent / clarification}
+  I -->|out of scope| R[Refuse with reason]
+  I --> E[Query enhancement]
+  E --> S[Schema + metric retrieval]
+  S --> P[Plan]
+  P --> G[Generate SQL]
+  G --> A{Safety + governance}
+  A -->|blocked| R
+  A --> X[Read-only execution]
+  X --> V{Validation + consistency}
+  V -->|repair| G
+  V --> O[Answer or sandboxed Python step]
+```
 
-Python 3.11 · LangGraph · DeepSeek (`deepseek-chat`, factory-isolated) · sqlglot · fastembed
-(hybrid lexical + embedding retrieval) · Elasticsearch 8 (opt-in value-linking channel,
-`pip install -e ".[es]"`) · SQLite · Docker (isolated Python sandbox) · pytest + CI, with an
-opt-in real-Elasticsearch integration tier.
+Model-backed stages propose interpretations, plans, SQL, consistency judgments, and Python.
+Deterministic code owns the enforceable boundaries: allowed plan shapes, retry budgets,
+read-only execution, governance routing, and the sandbox boundary.
 
-## License
+## Current evidence
+
+The numbers below answer different questions and should not be combined into one accuracy
+score.
+
+| Evaluation | Result | Interpretation |
+| --- | --- | --- |
+| Deterministic gate fixture | 14/14 routes match the specification | A CI contract check (`by_construction`), not population accuracy |
+| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
+| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; no default cutover |
+| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs default 55/90, but lower context recall and 3 extra `no_sql` outcomes | Preregistered cutover gate failed; default unchanged |
+
+The value-sensitive comparison is documented in the
+[Stage 3B report](docs/reliability/2026-08-11-stage3b-current-hybrid-headtohead.md).
+The latest consolidated interpretation, including the general-mix run and open problems, is
+in [Project status](docs/STATUS.md).
+
+The public-benchmark screen was frozen before execution and is documented in the
+[Spider preregistration](docs/reliability/2026-08-15-spider-external-preregistration.md) and
+[reviewed result](docs/reliability/2026-08-15-spider-external-result.md). It uses Cadence's custom
+execution oracle and should not be read as an official Spider leaderboard score.
+
+One earlier experiment is also kept because it shows the evaluation policy in practice: two
+plausible changes to the semantic-consistency judge were rejected after clean controls exposed
+no benefit or a false refusal. See the
+[judge-entity experiment](docs/reliability/2026-07-22-judge-entity-experiment.md).
+
+## Run the evaluation tiers
+
+```bash
+# Deterministic, service-free, CI-enforced.
+python -m evals.scorecard --tier deterministic
+
+# Real DeepSeek + local Docker sandbox.
+docker build -t cadence-sandbox:latest - < Dockerfile.sandbox
+python -m evals.scorecard --tier all
+
+# Optional real Elasticsearch integration tests.
+pip install -e ".[dev,es]"
+CADENCE_ES_URL=http://localhost:9200 pytest -q -m es_integration -o addopts=
+```
+
+Paid, repeated E2E drivers live under `evals/` and are manual-only in GitHub Actions. Raw JSON
+artifacts are excluded from Git; reviewed Markdown conclusions are versioned.
+
+To validate the frozen Spider data and all 30 gold queries without making model calls:
+
+```bash
+python -m evals.spider_external --spider-dir /path/to/spider_data --preflight-only
+```
+
+## Reproduce the value-retrieval path
+
+Value ingestion is explicit and separate from querying. The CLI checks that the
+schema-specific index exists before a value-enabled query, rather than creating an empty index
+or silently degrading after an LLM call.
+
+```bash
+pip install -e ".[dev,es]"
+cadence build-demo-db /tmp/cadence-value.db --kind value
+docker compose -f docker-compose.es.yml up -d
+
+cadence index-values \
+  --db /tmp/cadence-value.db \
+  --es-url http://localhost:9200
+
+cadence retrieve \
+  --db /tmp/cadence-value.db \
+  --config dense_value \
+  --es-url http://localhost:9200 \
+  "tickets for 上海云图信息技术"
+```
+
+Add `--json` to `retrieve` or `index-values` for machine-readable output. The same `--db`,
+`--config`, `--semantic-layer`, and `--es-url` options are available on `cadence ask`.
+
+## Known boundaries
+
+- The main fixtures use small, repository-owned SaaS schemas. The 30-case Spider screen adds an
+  external check, but is too small and uses a custom oracle, so it is not population accuracy.
+- Elasticsearch value retrieval requires a separately managed service and an explicit
+  `index-values` ingestion step. The CLI exposes the evaluated presets but does not start or
+  operate Elasticsearch itself.
+- The semantic layer governs a metric registry, not yet a complete declarative entity and
+  relationship model.
+- HITL state and runtime model/backend registries are in memory and intended for the local
+  demo, not a distributed service.
+- There is no multi-tenancy, row-level access control, warehouse identity, or schema migration
+  lifecycle.
+
+These are tracked, in priority order, in [Project status](docs/STATUS.md).
+
+## Project structure
+
+```text
+agent/          Agent graph, safety, governance, retrieval, execution
+evalharness/    Golden loaders, metrics, oracles, report aggregation
+evals/          Deterministic and real-service evaluation drivers
+tests/          Service-free unit and integration-style tests
+demo/           Streamlit demo
+docs/           Current status and reviewed reliability reports
+```
+
+## Origin and license
+
+Cadence continues the DB-agnostic core of my earlier DataPilot project. The planner-driven
+workflow, typed retrieval pipeline, Docker sandbox, governance topology, and evaluation
+surfaces were developed in this repository. The graph structure was informed by the separation
+of schema recall and feasibility gating in Alibaba's `spring-ai-alibaba/DataAgent`.
 
 MIT — see [LICENSE](LICENSE).
