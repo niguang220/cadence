@@ -24,7 +24,7 @@ class EnhanceResult:
 # time frame the question did not contain. An invented window gets hardened by the planner
 # into date logic against a static DB, and the step never yields SQL (the MRR demo bug). The
 # prompt forbids this too; this guard catches the residual the prompt still lets through.
-# It errs toward catching: the fallback is a SAFE revert to the honest original question, so
+# It errs toward catching: the fallback is a safe revert to the original question, so
 # a false positive only forfeits the rewrite's optimization, never a correct answer (the
 # per-gate rule -- a soft-revert fallback licenses a high-recall bias). Known limits: it
 # targets relative/explicit date markers (relative phrases, numeric windows, explicit years),

@@ -1,6 +1,6 @@
-"""End-to-end wiring check for the Plan 3 node graph (capstone, test-only).
+"""End-to-end wiring check for the gated node graph (test-only).
 
-Confirms the six new Plan-3 nodes -- intent_recognition, query_enhance, schema_recall,
+Confirms the six gated nodes -- intent_recognition, query_enhance, schema_recall,
 table_relation, feasibility_assessment, semantic_consistency -- are wired into the full
 graph in the right relative order on a normal data question, and that an out-of-scope
 question refuses at intent_recognition, short-circuiting before any of the other five
@@ -29,7 +29,7 @@ def test_full_graph_e2e_normal_question_visits_plan3_nodes_in_order(saas_db):
     i_feasibility = nodes.index("feasibility_assessment")
     i_consistency = nodes.index("semantic_consistency")
     assert i_intent < i_enhance < i_schema < i_relation < i_feasibility < i_consistency, (
-        f"Plan-3 nodes out of order in trace: {nodes}"
+        f"gated nodes out of order in trace: {nodes}"
     )
 
     assert "respond" in nodes and nodes[-1] == "respond"
@@ -48,7 +48,7 @@ def test_out_of_scope_question_refuses_at_intent(saas_db):
     )
     assert intent_entry.get("refused") is True
 
-    # the refusal short-circuits BEFORE any of the five downstream Plan-3 nodes run
+    # The refusal short-circuits before any of the five downstream gated nodes run.
     downstream = ("query_enhance", "schema_recall", "table_relation",
                  "feasibility_assessment", "semantic_consistency")
     assert not any(n in nodes for n in downstream)

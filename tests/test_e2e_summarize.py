@@ -1,4 +1,4 @@
-"""Aggregation of EvalRecords into the roadmap Step-1 report (pure logic)."""
+"""Aggregation of EvalRecords into the E2E capability report (pure logic)."""
 from evalharness.e2e_eval import EvalRecord, summarize
 
 _CFG = {"name": "lexical_baseline"}

@@ -508,10 +508,10 @@ def _validate(state: AgentState) -> dict:
 def _semantic_consistency(state: AgentState, config=None) -> dict:
     """Post-generation LLM check on a validated SQL step: does the SQL (and its rows)
     answer the QUESTION's intent (measure/entity/grain)? Runs ONLY on the validate-OK
-    path (execute -> validate --(ok)--> here -> step_advance), BEFORE any Python step
+    path (execute -> validate --(ok)--> here -> step_advance), before any Python step
     consumes the rows. A governance_block / exec error / structural repair sets ``error``
-    and is routed away by ``_route_after_sql_validate`` on the error branch, so a
-    governed/blocked result NEVER reaches this judge -- Plan 2's governance invariant.
+    and is routed away by ``_route_after_sql_validate`` on the error branch. A governed or
+    blocked result therefore cannot reach this judge.
 
     Judges the ORIGINAL ``state["question"]`` (the intent anchor), never the enhanced
     rewrite (judging against the rewrite would be circular). A confident ``not ok`` feeds
@@ -750,7 +750,7 @@ def _respond(state: AgentState) -> dict:
             text = text[:800] + " ...(truncated)"
         answer = f"{answer}\nAnalysis: {text}"
     truncated = state["result"].truncated
-    if truncated:                                       # be honest: analysis on a sample
+    if truncated:                                       # disclose that analysis used a sample
         answer += (f"\n(Note: this analysis is based on the first {len(state['result'].rows)} "
                    "rows; the query result was truncated.)")
     return {"answer": answer,
@@ -797,9 +797,9 @@ def _route_dispatch(state: AgentState) -> str:
 
 
 def _route_after_sql_validate(state: AgentState) -> str:
-    # ok path now runs the semantic-consistency judge FIRST (before step_advance); the
-    # error branches are UNTOUCHED so a governance_block / exec error / structural repair
-    # NEVER reaches the judge -- Plan 2's governance invariant holds structurally.
+    # The ok path runs the semantic-consistency judge before step_advance. Error branches
+    # route a governance_block, execution error, or structural repair away from the judge.
+    # A governed result cannot reach the judge; the graph enforces this structurally.
     if not state.get("error"):
         return "semantic_consistency"
     if state.get("repair_kind") == "governance_block":
@@ -952,7 +952,7 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
         "question": question,
         "db_path": str(db_path),
         "model": model,
-        "value_backend": value_backend,   # non-HITL: in state (no checkpoint); the graph never sees ES
+        "value_backend": value_backend,   # protocol object in state; no concrete ES import in the graph
         "k": k,
         "tables": tables,
         "semantic_layer": semantic_layer,

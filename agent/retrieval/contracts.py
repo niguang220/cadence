@@ -4,8 +4,10 @@ from typing import Literal
 
 
 class UnsupportedRetrievalCapability(Exception):
-    """Raised at pipeline execution when a config requests a capability not built in this
-    stage (es / qdrant / llm). Carries the full list so the caller sees every missing one."""
+    """Raised when a config requests an unavailable retrieval capability.
+
+    Carries the full list so the caller sees every missing capability in one failure.
+    """
     def __init__(self, capabilities: list[str]):
         self.capabilities = list(capabilities)
         super().__init__(f"unsupported retrieval capabilities: {self.capabilities}")

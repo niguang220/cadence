@@ -1,10 +1,10 @@
-"""Manual real-API driver for the end-to-end capability baseline (roadmap Step 1).
+"""Manual real-API driver for the end-to-end capability baseline.
 
-Runs every saas_metrics case through the FULL agent, semantic layer ON and OFF, N times
-each, and reports the frozen Step-1 shape (traps ON/OFF, controls, first-try->repaired SQL
-validity, latency percentiles, avg tokens). This is EXPENSIVE (30 cases x 5 repeats x 2
+Runs every saas_metrics case through the full agent, semantic layer ON and OFF, N times
+each, and reports the frozen baseline shape (traps ON/OFF, controls, first-try->repaired SQL
+validity, latency percentiles, avg tokens). This is expensive (30 cases x 5 repeats x 2
 configs = 300 agent runs) and needs DEEPSEEK_API_KEY -- it is deliberately standalone, not
-folded into the cheap default scorecard (see DECISIONS.md #11). Output is measured=True
+folded into the cheap default scorecard. Output is measured=True
 with provenance (golden SHA-256 + model + UTC timestamp) and lands in docs/reliability/
 (evals/results/ is gitignored).
 """

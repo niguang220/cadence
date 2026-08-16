@@ -4,7 +4,7 @@ Unit tests pin ``check_semantic_consistency`` with a tiny fake model (parse the
 model's JSON verdict; fail OPEN to ``ok=True`` on a broken judge). Graph tests give
 the check teeth: a measure mismatch repairs once then proceeds, a persistent mismatch
 refuses (never reaching Python), an ``ok`` verdict goes straight to step_advance, and a
-governance-blocked result NEVER reaches this LLM judge (Plan 2 invariant). No API key.
+governance-blocked result cannot reach this LLM judge. No API key.
 """
 import agent.graph as graph
 from agent.graph import MAX_ATTEMPTS, run_agent
@@ -167,8 +167,8 @@ def test_empty_repair_hint_mismatch_still_repairs_not_step_advance(saas_db):
 
 
 def test_governance_blocked_result_never_reaches_semantic_consistency(tmp_path, monkeypatch):
-    # Plan 2 invariant: a PII/result-governance-blocked result must NEVER be fed to the
-    # LLM judge and must NEVER reach Python. The governance_block routes validate ->
+    # A PII/result-governance-blocked result must not be fed to the
+    # LLM judge or reach Python. The governance_block routes validate ->
     # respond, structurally bypassing semantic_consistency (it lives on the ok branch).
     db = str(build_demo_db(tmp_path / "demo.db"))
     sandbox_calls = []

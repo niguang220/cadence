@@ -85,8 +85,8 @@ def test_pipeline_does_not_put_pii_columns_in_prompt(tmp_path):
 
 
 def test_pipeline_refuses_when_no_tables_match(tmp_path):
-    # schema_recall is pure retrieval now; feasibility_assessment owns the
-    # empty-recall refusal (Plan 3 migration).
+    # schema_recall is pure retrieval; feasibility_assessment owns the
+    # empty-recall refusal.
     from agent.db.build_demo_db import build
     db = build(tmp_path / "t.db")
     res = answer_question(db, "what is the meaning of life", model=FakeModel("SELECT 1"))
@@ -164,7 +164,7 @@ def test_format_answer_count_is_consistent_with_preview():
     assert "showing 5 of 6" in out
 
 
-# --- Fix 3: answer_question forwards retrieval_config through to the graph ---
+# --- answer_question forwards retrieval_config through to the graph ---
 
 import agent.hybrid_retriever as hr
 import pytest

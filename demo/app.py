@@ -294,8 +294,8 @@ def _ask_tab() -> None:
 
 
 def _reliability_tab() -> None:
-    st.caption("A self-built eval harness, two tiers: a deterministic tier CI enforces on every "
-               "commit, and a measured tier run manually against the real model.")
+    st.caption("Two evaluation tiers: deterministic checks enforced in CI and measured runs "
+               "executed manually against the configured model.")
     st.markdown("**Deterministic tier** · zero-API, zero-Docker · a machine-checked spec")
     if st.button("Run the reliability checks"):
         rep = _scorecard()
@@ -328,7 +328,7 @@ def main() -> None:
                        layout="wide")
     st.markdown(_CSS, unsafe_allow_html=True)
     st.title("Cadence")
-    st.caption("A reliability-first NL→SQL data agent — real, live agent output, not a mockup.")
+    st.caption("A reliability-first NL→SQL data agent with inspectable SQL and execution traces.")
     gov, ask, rel = st.tabs(["⚖️  Governance demo", "💬  Ask anything", "📊  Reliability scorecard"])
     with gov:
         _governance_tab()
