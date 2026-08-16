@@ -10,7 +10,7 @@ from agent.graph import run_agent
 from conftest import PlanningFakeModel
 
 
-def test_full_graph_e2e_normal_question_visits_plan3_nodes_in_order(saas_db):
+def test_full_graph_e2e_normal_question_visits_gated_nodes_in_order(saas_db):
     model = PlanningFakeModel("SELECT COUNT(*) FROM account")
     res = run_agent(saas_db, "how many accounts?", model=model)
 
