@@ -50,7 +50,7 @@ class AgentState(TypedDict, total=False):
     result: Optional[ExecutionResult]
     attempts: int                    # generations done so far (0 = none yet; >0 = repairing)
 
-    # plan-driven execution (Plan 2)
+    # plan-driven execution
     plan: list[dict]                 # serialized [{kind, instruction}, ...]
     plan_attempts: int               # planner retries (bounded)
     step_index: int                  # cursor into plan
@@ -58,7 +58,7 @@ class AgentState(TypedDict, total=False):
     python_attempts: int             # python-step retries (bounded)
     python_analysis: dict            # parsed sandbox output for the current python step
 
-    # plan-approval HITL (Plan 3)
+    # plan-approval HITL
     approval_attempts: int           # human plan-edit rounds spent (bounded by MAX_APPROVAL_ATTEMPTS)
     approval_result: dict            # plan_approval outcome (decision/reason) for the trace
 

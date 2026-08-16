@@ -36,13 +36,15 @@ def _missing_capabilities(config: RetrievalConfig) -> list[str]:
 
 
 def _value_backend_for(config: RetrievalConfig, injected):
-    """Resolve the value backend the pipeline should use. An injected backend (tests / a caller
-    that already built one) wins. Otherwise a real ES backend would be constructed here — until it
-    is wired, an 'es' config without an injected backend degrades (typed), never silently empty.
-    The graph never reaches this: it passes no backend and stays ES-blind."""
+    """Return the caller-injected value backend.
+
+    Backend construction and index lifecycle stay outside the retrieval pipeline. A value-enabled
+    config without an injected backend therefore records a typed degradation instead of silently
+    behaving like an empty index.
+    """
     if injected is not None:
         return injected
-    raise ValueBackendError("no value backend available (elasticsearch backend not wired yet)")
+    raise ValueBackendError("no value backend was injected")
 
 
 def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *, k: int,
@@ -60,7 +62,7 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
     matches = MetricMatchProvider(tables).from_hits(metric_hits)
 
     if config.fusion == "legacy_minmax":
-        candidates = legacy_candidates(question, tables, k=k)   # fusion_score=None (Fix 2)
+        candidates = legacy_candidates(question, tables, k=k)   # legacy candidates have no RRF score
         anchors = [c.table for c in candidates]                 # retrieve() already applied top-k
         # metric matches are TELEMETRY ONLY on the legacy path — never added to anchors (parity).
         selection = SelectionDecision(anchor_tables=anchors, dropped_tables=[],
@@ -75,7 +77,7 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
                                    relation_plan=_empty_plan(config.relation_strategy),
                                    stage_events=events)
 
-    plan = _closure(config, tables, selection.anchor_tables, events)   # relation_strategy chooses (Fix 1/3)
+    plan = _closure(config, tables, selection.anchor_tables, events)
     return RetrievalResult(config_name=config.name, signals=signals, candidates=candidates,
                            metric_matches=matches, selection=selection, relation_plan=plan,
                            stage_events=events)
@@ -89,7 +91,7 @@ def _closure(config, tables, anchors, events):
     if config.relation_strategy == "legacy_one_hop":
         return legacy_one_hop_plan(tables, anchors)
     plan = plan_relations(tables, anchors, max_hops=config.max_bridge_hops)
-    if plan.unconnected_anchors:                                   # Fix 3: emit relation failure event
+    if plan.unconnected_anchors:
         events.append(RetrievalStageEvent(stage="relation", event="unconnected_anchor",
                                           detail={"unconnected": list(plan.unconnected_anchors)}))
     return plan

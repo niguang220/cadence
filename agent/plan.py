@@ -42,13 +42,13 @@ def validate_plan(plan: Plan) -> PlanVerdict:
             return PlanVerdict(False, f"invalid step kind: {s.kind!r}")
         if not s.instruction.strip():
             return PlanVerdict(False, "a step has an empty instruction")
-    # Plan 2 supports exactly one SQL step, optionally followed by one Python step.
-    # The Step/Plan structure stays general so Plan 3 can relax this to richer plans
-    # without a data-model change; only validation is tightened here. Tightening this
+    # The runtime supports exactly one SQL step, optionally followed by one Python step.
+    # Step and Plan stay general so richer plans can be added without changing the data
+    # model; the validator deliberately enforces the smaller executable subset. This
     # is what makes `state["result"]` an unambiguous handle for the Python step (there
     # is at most one SQL result) and lets `respond` aggregate deterministically.
     kinds = [s.kind for s in plan.steps]
     if kinds not in (["sql"], ["sql", "python"]):
         return PlanVerdict(
-            False, f"unsupported plan shape {kinds}; Plan 2 supports [sql] or [sql, python]")
+            False, f"unsupported plan shape {kinds}; expected [sql] or [sql, python]")
     return PlanVerdict(True)

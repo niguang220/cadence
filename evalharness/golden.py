@@ -1,4 +1,4 @@
-"""Strict loaders for the three Plan 4 golden sets.
+"""Strict loaders for the evaluation golden sets.
 
 Each set has its own dataclass. Loading is strict on purpose so a hand-authored JSON
 cannot drift silently: an empty dataset, a duplicate id, or an unknown field (the

@@ -1,12 +1,12 @@
 """End-to-end capability scorer for the saas_metrics set.
 
-Runs the FULL agent (``run_agent``) per case and scores it against the gold result with
+Runs the full agent (``run_agent``) per case and scores it against the gold result with
 the same ``execution_match`` oracle used everywhere else, then derives one flat
 ``EvalRecord`` (locked schema) per run. Record derivation is pure -- given an
 ``AnswerResult`` and the gold rows it computes every field with no I/O -- so it is unit
 tested with hand-built results and never needs a real API. ``run_case`` adds the two
 executions (gold + agent) and a fixture self-check; ``summarize`` aggregates a flat list
-of records into the roadmap's Step-1 report shape.
+of records into the E2E capability report shape.
 """
 from __future__ import annotations
 

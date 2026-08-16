@@ -1,6 +1,6 @@
 """The sandbox surface: scorer units (fake outcomes) + fixture/contract teeth.
 
-The teeth are honestly fixture/oracle validation, NOT container-isolation testing: each
+These checks validate the fixture and oracle, not container isolation: each
 wrong_program is run via the sandbox's local runner seam on the host (stdlib-only, no
 pandas, no Docker) and must (a) exit 0, (b) emit parseable JSON, (c) diverge from
 expected_output. All three are required -- a crashing/empty/non-JSON program would pass a

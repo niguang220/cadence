@@ -28,6 +28,9 @@ es = [
     "elasticsearch>=8,<9",
 ]
 
+[project.scripts]
+cadence = "agent.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["agent*", "evalharness*"]
 

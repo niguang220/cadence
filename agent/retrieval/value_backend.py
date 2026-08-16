@@ -225,6 +225,13 @@ class ElasticsearchValueBackend:
         except Exception as e:
             raise ValueBackendError(str(e)) from e
 
+    def index_exists(self) -> bool:
+        """Check that ingestion has created the schema-specific index."""
+        try:
+            return bool(self._es.indices.exists(index=self._index))
+        except Exception as e:
+            raise ValueBackendError("value-index preflight failed") from e
+
     def _bulk(self, ops: list[dict], op: str) -> None:
         """Run a refresh-blocking bulk and FAIL LOUD on either a transport error or a per-item
         partial failure. The raised message is sanitized to op type / failed-count / HTTP statuses

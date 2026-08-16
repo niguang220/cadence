@@ -74,7 +74,7 @@ def test_run_agent_current_hybrid_populates_answerresult(det_index, tmp_path):
     assert res.retrieval_result.relation_plan.strategy == "legacy_one_hop"
 
 
-# --- Fix 1: _table_relation routes on relation_plan.strategy, not config.fusion ---
+# --- _table_relation routes on relation_plan.strategy, not config.fusion ---
 
 from agent.retrieval.contracts import (RelationEdge, RelationPlan, RetrievalResult, SelectionDecision)
 from agent.retrieval.serde import serialize_result
@@ -111,7 +111,7 @@ def test_table_relation_legacy_one_hop_uses_join_paths(tmp_path):
     assert "Join paths:" in out.get("schema", "")
 
 
-# --- Fix 2: real RRF graph path (stub run_retrieval; join_paths must NOT be called) ---
+# --- real RRF graph path (stub run_retrieval; join_paths must NOT be called) ---
 
 from agent.retrieval.contracts import TableCandidate
 
@@ -139,7 +139,7 @@ def test_rrf_graph_path_uses_anchors_bridges_and_edges(monkeypatch, tmp_path):
     assert "playlist_track.track_id = track.track_id" in s2["schema"]    # hints from edges only
 
 
-# --- Fix 4: non-vacuous HITL config-survival probe ---
+# --- non-vacuous HITL config-survival probe ---
 
 _PROBE = RetrievalConfig(name="checkpoint_probe", lexical=True, dense_backend="memory",
                          value_backend=None, selector=None, fusion="legacy_minmax",

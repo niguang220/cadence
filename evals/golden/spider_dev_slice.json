@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "benchmark": "spider-dev",
+  "dataset_sha256": "30d64a3fccde493226df79687aed9e4a1c0129525baf44f29c0573d914d758a4",
+  "dataset_size": 1034,
+  "selection": {
+    "method": "sorted(random.Random(seed).sample(range(dataset_size), n))",
+    "seed": 20260815,
+    "n": 30
+  },
+  "cases": [
+    {"index": 29, "db_id": "concert_singer"},
+    {"index": 47, "db_id": "pets_1"},
+    {"index": 52, "db_id": "pets_1"},
+    {"index": 59, "db_id": "pets_1"},
+    {"index": 68, "db_id": "pets_1"},
+    {"index": 88, "db_id": "car_1"},
+    {"index": 93, "db_id": "car_1"},
+    {"index": 118, "db_id": "car_1"},
+    {"index": 138, "db_id": "car_1"},
+    {"index": 161, "db_id": "car_1"},
+    {"index": 179, "db_id": "flight_2"},
+    {"index": 209, "db_id": "flight_2"},
+    {"index": 276, "db_id": "employee_hire_evaluation"},
+    {"index": 318, "db_id": "cre_Doc_Template_Mgt"},
+    {"index": 427, "db_id": "museum_visit"},
+    {"index": 541, "db_id": "student_transcripts_tracking"},
+    {"index": 547, "db_id": "student_transcripts_tracking"},
+    {"index": 576, "db_id": "student_transcripts_tracking"},
+    {"index": 584, "db_id": "student_transcripts_tracking"},
+    {"index": 629, "db_id": "tvshow"},
+    {"index": 657, "db_id": "poker_player"},
+    {"index": 692, "db_id": "voter_1"},
+    {"index": 783, "db_id": "world_1"},
+    {"index": 829, "db_id": "orchestra"},
+    {"index": 849, "db_id": "orchestra"},
+    {"index": 887, "db_id": "network_1"},
+    {"index": 897, "db_id": "network_1"},
+    {"index": 937, "db_id": "dog_kennels"},
+    {"index": 977, "db_id": "dog_kennels"},
+    {"index": 994, "db_id": "dog_kennels"}
+  ]
+}
