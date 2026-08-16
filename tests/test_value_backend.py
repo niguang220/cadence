@@ -84,6 +84,23 @@ def test_backend_error_type_exists():
     assert isinstance(ValueHit("t", "c", "v", "exact_keyword", 1.0, "d"), ValueHit)
 
 
+def test_es_index_exists_uses_schema_specific_index():
+    class Indices:
+        def __init__(self):
+            self.seen = None
+
+        def exists(self, *, index):
+            self.seen = index
+            return False
+
+    class Client:
+        indices = Indices()
+
+    backend = ElasticsearchValueBackend(Client(), "cadence-values-test")
+    assert backend.index_exists() is False
+    assert Client.indices.seen == "cadence-values-test"
+
+
 # --- long-CJK contiguous-substring high-confidence matching (the query_enhance merge case) --------
 
 def _is_high_conf(res):

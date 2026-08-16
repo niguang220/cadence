@@ -23,6 +23,10 @@ def _reindex(backend):
     backend.prune({d.document_id for d in _DOCS})
 
 
+def test_es_index_preflight(es_backend):
+    assert es_backend.index_exists() is True
+
+
 def test_es_exact_keyword_hit(es_backend):
     _reindex(es_backend)
     hits = es_backend.search("do we sell Widget", allowed=ALLOW)
