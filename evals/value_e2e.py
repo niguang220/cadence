@@ -33,12 +33,12 @@ from agent.execution import run_query
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
 
-# Stage 3B head-to-head: the shipping default (current_hybrid, legacy_minmax + one_hop — a
+# Stage 3B head-to-head: the pre-migration default (legacy_minmax: min-max fusion + one_hop — a
 # byte-identical control) against the RRF candidate-production line. dense_value (RRF + shortest_path
 # + value) is the candidate production scheme; rrf_hybrid and value_ablation isolate the dense and
 # value increments. No legacy_minmax+value config, no new fusion strategy, no name-based routing.
 _CONFIGS = {
-    "current_hybrid": RetrievalConfig.current_hybrid,
+    "legacy_minmax": RetrievalConfig.legacy_minmax,
     "rrf_hybrid": RetrievalConfig.rrf_hybrid,
     "value_ablation": RetrievalConfig.value_ablation,
     "dense_value": RetrievalConfig.dense_value,
@@ -189,7 +189,7 @@ def summarize(report: dict) -> dict:
     """The three head-to-head questions this stage exists to answer."""
     recs = report["records"]
     return {
-        "dense_value_vs_current_hybrid": _paired(recs, "dense_value", "current_hybrid"),  # cutover call
+        "dense_value_vs_legacy_minmax": _paired(recs, "dense_value", "legacy_minmax"),  # cutover call
         "dense_value_vs_rrf_hybrid": _paired(recs, "dense_value", "rrf_hybrid"),           # value increment
         "dense_value_vs_value_ablation": _paired(recs, "dense_value", "value_ablation"),   # dense increment
     }

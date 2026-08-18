@@ -1,7 +1,7 @@
 """Stage 3C — general-mix regression: production default vs the value candidate on a NON-value-biased set.
 
 Runs the FULL agent over the saas_metrics 30-case golden (24 traps + 6 controls) under two configs
-(current_hybrid = shipping default; dense_value = the existing RRF + shortest_path + value candidate)
+(legacy_minmax = the pre-migration default; dense_value = RRF + shortest_path + value)
 and both semantic-layer modes, 5 repeats each -> 600 records, one shared batch/concurrency. It answers
 ONE question: does adopting dense_value make GENERAL queries regress?
 
@@ -31,10 +31,10 @@ from evalharness.golden import SAAS_METRICS_PATH, load_saas_metrics
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
 
-# Production default vs the existing candidate. No new fusion, no current_hybrid+value, no name routing.
-_CONFIGS = {"current_hybrid": RetrievalConfig.current_hybrid, "dense_value": RetrievalConfig.dense_value}
+# Pre-migration default vs the existing candidate. No new fusion, no legacy+value, no name routing.
+_CONFIGS = {"legacy_minmax": RetrievalConfig.legacy_minmax, "dense_value": RetrievalConfig.dense_value}
 _SEMANTIC_MODES = (False, True)
-_CLEAN_LOSS_MARGIN = 3                 # dense_value <= current_hybrid - 3 (of 5) is a clean loss
+_CLEAN_LOSS_MARGIN = 3                 # dense_value <= legacy_minmax - 3 (of 5) is a clean loss
 
 
 # --- run -----------------------------------------------------------------------------------------
@@ -76,14 +76,14 @@ def _matched(records, config, sem, cid):
 
 
 def _paired(records, case_ids, sem) -> dict:
-    """dense_value vs current_hybrid per case (matched/repeats) for one semantic mode."""
+    """dense_value vs legacy_minmax per case (matched/repeats) for one semantic mode."""
     per_case, wins, losses, ties, clean_loss, regressions = {}, 0, 0, 0, [], []
     for cid in case_ids:
-        ch, nch = _matched(records, "current_hybrid", sem, cid)
+        ch, nch = _matched(records, "legacy_minmax", sem, cid)
         dv, ndv = _matched(records, "dense_value", sem, cid)
         if nch == 0 or ndv == 0:
             continue
-        per_case[cid] = {"current_hybrid": f"{ch}/{nch}", "dense_value": f"{dv}/{ndv}"}
+        per_case[cid] = {"legacy_minmax": f"{ch}/{nch}", "dense_value": f"{dv}/{ndv}"}
         wins += dv > ch
         losses += dv < ch
         ties += dv == ch
@@ -94,12 +94,12 @@ def _paired(records, case_ids, sem) -> dict:
     return {"wins": wins, "losses": losses, "ties": ties, "clean_loss_ids": sorted(clean_loss),
             "regression_ids": sorted(regressions),
             "per_case_losses": {c: v for c, v in per_case.items()
-                                if int(v["dense_value"].split("/")[0]) < int(v["current_hybrid"].split("/")[0])}}
+                                if int(v["dense_value"].split("/")[0]) < int(v["legacy_minmax"].split("/")[0])}}
 
 
 def _lat_tok(records, config) -> dict:
     """Latency (p50/p95) and mean tokens under three denominators: all runs / generation-reached /
-    answered. current_hybrid refuses fast, so all-runs p50 misstates cost — the other two are the
+    answered. legacy_minmax refuses fast, so all-runs p50 misstates cost — the other two are the
     apples-to-apples views."""
     rr = [r for r in records if r.retrieval_config["name"] == config]
     buckets = {
@@ -162,14 +162,14 @@ def summarize(records: list[EvalRecord]) -> dict:
     by_mode = {}
     for sem, label in ((False, "off"), (True, "on")):
         by_mode[label] = {
-            "traps": {"current_hybrid": rate("current_hybrid", sem, trap_ids),
+            "traps": {"legacy_minmax": rate("legacy_minmax", sem, trap_ids),
                       "dense_value": rate("dense_value", sem, trap_ids),
                       "paired": _paired(records, trap_ids, sem)},
-            "controls": {"current_hybrid": rate("current_hybrid", sem, control_ids),
+            "controls": {"legacy_minmax": rate("legacy_minmax", sem, control_ids),
                          "dense_value": rate("dense_value", sem, control_ids),
                          "paired": _paired(records, control_ids, sem)},
         }
-        # control diverging_ids: controls where dense_value regresses vs current_hybrid in this mode
+        # control diverging_ids: controls where dense_value regresses vs legacy_minmax in this mode
         by_mode[label]["controls"]["diverging_ids"] = by_mode[label]["controls"]["paired"]["regression_ids"]
 
     value_hit_records = [r for r in records if r.value_hit]

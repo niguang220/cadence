@@ -6,6 +6,40 @@ import pytest
 
 
 PRESET_EXPECTATIONS = {
+    # The shipping default, pinned field-by-field: BM25 lexical backend at the neutral equal
+    # weighting, typed RRF, shortest-path relations, value retrieval opt-in (None).
+    "governed_rrf": {
+        "lexical": True,
+        "lexical_backend": "bm25",
+        "lexical_weight": 1.0,
+        "dense_weight": 1.0,
+        "dense_backend": "memory",
+        "value_backend": None,
+        "selector": None,
+        "fusion": "rrf",
+        "relation_strategy": "shortest_path",
+        "candidate_k": 15,
+        "context_anchor_k": 5,
+        "rrf_constant": 60,
+        "max_bridge_hops": 3,
+    },
+    # The retained historical comparator. Its lexical backend and weights must stay at the
+    # pre-migration values so already-published numbers remain reproducible.
+    "legacy_minmax": {
+        "lexical": True,
+        "lexical_backend": "hand_weighted",
+        "lexical_weight": 1.0,
+        "dense_weight": 1.0,
+        "dense_backend": "memory",
+        "value_backend": None,
+        "selector": None,
+        "fusion": "legacy_minmax",
+        "relation_strategy": "legacy_one_hop",
+        "candidate_k": 15,
+        "context_anchor_k": 5,
+        "rrf_constant": 60,
+        "max_bridge_hops": 3,
+    },
     "lexical_baseline": {
         "lexical": True,
         "dense_backend": None,
@@ -67,6 +101,25 @@ PRESET_EXPECTATIONS = {
         "max_bridge_hops": 3,
     },
 }
+
+
+@pytest.mark.parametrize("preset_name",
+                         ["lexical_baseline", "rrf_hybrid", "value_ablation", "dense_value",
+                          "full_rag"])
+def test_evaluation_arms_keep_the_pre_migration_lexical_backend(preset_name):
+    """Published eval numbers were measured with the hand-weighted scorer. Changing an arm's
+    backend would silently invalidate them, so only the shipping default moves to BM25."""
+    from agent.retrieval.contracts import RetrievalConfig as C
+
+    config = getattr(C, preset_name)()
+    assert config.lexical_backend == "hand_weighted"
+    assert (config.lexical_weight, config.dense_weight) == (1.0, 1.0)
+
+
+def test_default_resolves_to_the_governed_rrf_preset():
+    from agent.retrieval.contracts import RetrievalConfig as C
+
+    assert C.default() == C.governed_rrf()
 
 
 @pytest.mark.parametrize("preset_name", sorted(PRESET_EXPECTATIONS))

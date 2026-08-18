@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv",
     "fastembed",
     "numpy",
+    "rank-bm25",
 ]
 
 [project.optional-dependencies]

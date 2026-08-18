@@ -19,12 +19,17 @@ from agent.retrieval.contracts import RetrievalConfig
 from agent.retrieval.value_backend import ValueBackendError
 
 _COMMANDS = {"ask", "retrieve", "index-values", "build-demo-db"}
+# The canonical default is named once, here, and resolved through RetrievalConfig.default().
+_DEFAULT_CONFIG_NAME = "governed_rrf"
 _CONFIG_FACTORIES = {
-    "current_hybrid": RetrievalConfig.current_hybrid,
+    "governed_rrf": RetrievalConfig.default,
     "lexical_baseline": RetrievalConfig.lexical_baseline,
     "rrf_hybrid": RetrievalConfig.rrf_hybrid,
     "value_ablation": RetrievalConfig.value_ablation,
     "dense_value": RetrievalConfig.dense_value,
+    "legacy_minmax": RetrievalConfig.legacy_minmax,
+    # deprecated alias, kept for one release cycle
+    "current_hybrid": RetrievalConfig.current_hybrid,
 }
 
 
@@ -43,10 +48,12 @@ def _add_query_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("question", help="natural-language question")
     parser.add_argument("--db", type=Path, help="SQLite database path (default: bundled SaaS DB)")
     parser.add_argument("-k", type=int, default=5, help="number of schema tables to retrieve")
-    parser.add_argument("--config", choices=tuple(_CONFIG_FACTORIES), default="current_hybrid",
-                        help="retrieval preset (default: current_hybrid)")
-    parser.add_argument("--semantic-layer", action="store_true",
-                        help="bind governed metric definitions for this request")
+    parser.add_argument("--config", choices=tuple(_CONFIG_FACTORIES),
+                        default=_DEFAULT_CONFIG_NAME,
+                        help=f"retrieval preset (default: {_DEFAULT_CONFIG_NAME})")
+    parser.add_argument("--semantic-layer", action=argparse.BooleanOptionalAction, default=True,
+                        help="bind governed metric definitions for this request "
+                             "(default: on; use --no-semantic-layer to opt out)")
     parser.add_argument("--es-url", help="Elasticsearch URL (or set CADENCE_ES_URL)")
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 
@@ -135,10 +142,12 @@ def _value_backend(config: RetrievalConfig, tables, es_url: str | None, *, requi
 def _metric_hits(question: str, tables, enabled: bool):
     if not enabled:
         return []
-    from agent.retrieval.metric_match import validate_all_metrics
+    from agent.retrieval.metric_match import registry_governs, validate_all_metrics
     from agent.semantic_layer import MetricRegistry
 
     registry = MetricRegistry.load()
+    if not registry_governs(registry, tables):
+        return []                       # the registry does not govern this database
     validate_all_metrics(registry, tables)
     return [h for h in registry.retrieve_matches(question) if h.match_type == "alias"]
 

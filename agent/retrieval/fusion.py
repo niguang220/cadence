@@ -31,7 +31,7 @@ def weighted_rrf(channel_results: dict[str, list[ChannelTableResult]], *,
 
 def legacy_candidates(question: str, tables: list[Table], *, k: int,
                       index=None) -> list[TableCandidate]:
-    """current_hybrid compatibility: reuse the existing hybrid_retrieve (min-max + alpha=0.4)
+    """legacy_minmax comparator: reuse the existing hybrid_retrieve (min-max + alpha=0.4)
     verbatim and wrap the returned table names as candidates (fusion_rank = position). ``index``
     is injectable so parity tests use a deterministic fake; when None, build/cache the real
     SemanticIndex exactly like ``agent.hybrid_retriever.retrieve`` (including its lexical

@@ -29,7 +29,27 @@ from evalharness.spider import (
 
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
-_CONFIGS = (RetrievalConfig.current_hybrid(), RetrievalConfig.rrf_hybrid())
+# Default pair reproduces the published preregistered screen. --configs selects a different
+# pair (e.g. the shipping default against the retained comparator) without editing the driver.
+_CONFIGS = (RetrievalConfig.legacy_minmax(), RetrievalConfig.rrf_hybrid())
+_CONFIG_FACTORIES = {
+    "governed_rrf": RetrievalConfig.default,
+    "legacy_minmax": RetrievalConfig.legacy_minmax,
+    "rrf_hybrid": RetrievalConfig.rrf_hybrid,
+    "lexical_baseline": RetrievalConfig.lexical_baseline,
+}
+
+
+def configs_from_names(names: str | None) -> tuple:
+    if not names:
+        return _CONFIGS
+    parts = [n.strip() for n in names.split(",") if n.strip()]
+    if len(parts) != 2:
+        raise ValueError("--configs needs exactly two comma-separated preset names")
+    unknown = [n for n in parts if n not in _CONFIG_FACTORIES]
+    if unknown:
+        raise ValueError(f"unknown preset(s): {unknown}")
+    return tuple(_CONFIG_FACTORIES[n]() for n in parts)
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -39,19 +59,22 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--configs", help="two comma-separated presets, baseline first "
+                                         "(default: legacy_minmax,rrf_hybrid)")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--output", type=Path, help="override the ignored raw JSON output path")
     return parser.parse_args(argv)
 
 
 def run_comparison(cases, tables_by_db, model, *, repeats: int = 3, k: int = 5,
-                   concurrency: int = 4) -> dict:
+                   concurrency: int = 4, configs: tuple | None = None) -> dict:
     if repeats < 1 or k < 1 or concurrency < 1:
         raise ValueError("repeats, k, and concurrency must all be >= 1")
+    configs = configs or _CONFIGS
     plan = [
         (repeat_index, config, case)
         for repeat_index in range(repeats)
-        for config in _CONFIGS
+        for config in configs
         for case in cases
     ]
 
@@ -78,10 +101,10 @@ def run_comparison(cases, tables_by_db, model, *, repeats: int = 3, k: int = 5,
                 records[index] = future.result()
     return {
         "records": [asdict(record) for record in records],
-        "summary": summarize_spider(records),
+        "summary": summarize_spider(records, baseline=configs[0].name, candidate=configs[1].name),
         "repeats": repeats,
         "retrieval_k": k,
-        "retrieval_configs": [serialize_config(config) for config in _CONFIGS],
+        "retrieval_configs": [serialize_config(config) for config in configs],
         "semantic_layer": False,
         "clarification": False,
     }
@@ -89,9 +112,10 @@ def run_comparison(cases, tables_by_db, model, *, repeats: int = 3, k: int = 5,
 
 def build_report(cases, tables_by_db, model, *, model_name: str, manifest_path: Path,
                  dataset_sha256: str, repeats: int = 3, k: int = 5,
-                 concurrency: int = 4) -> dict:
+                 concurrency: int = 4, configs: tuple | None = None) -> dict:
     result = run_comparison(
-        cases, tables_by_db, model, repeats=repeats, k=k, concurrency=concurrency
+        cases, tables_by_db, model, repeats=repeats, k=k, concurrency=concurrency,
+        configs=configs
     )
     return {
         "measured": True,
@@ -144,6 +168,7 @@ def main(argv=None) -> None:
         repeats=args.repeats,
         k=args.k,
         concurrency=args.concurrency,
+        configs=configs_from_names(args.configs),
     )
     output = args.output
     if output is None:

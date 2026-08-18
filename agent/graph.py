@@ -69,7 +69,8 @@ from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
 from agent.retrieval.contracts import RetrievalConfig
 from agent.retrieval.grounding import value_grounding_block
-from agent.retrieval.metric_match import deserialize_hits, serialize_hits, validate_all_metrics
+from agent.retrieval.metric_match import (deserialize_hits, registry_governs, serialize_hits,
+                                          validate_all_metrics)
 from agent.retrieval.pipeline import run_retrieval
 from agent.retrieval.serde import (deserialize_config, deserialize_result, serialize_config,
                                     serialize_result)
@@ -141,10 +142,17 @@ def _preflight_context(state: AgentState) -> dict:
     tables = state.get("tables") or introspect(state["db_path"])
     thresh = state.get("threshold", 0.5)
     hits = []
+    ungoverned_schema = False
     if state.get("semantic_layer"):
         registry = _metric_registry()
-        validate_all_metrics(registry, tables)      # G4: validate every semantic preflight; no memo
-        hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
+        if registry_governs(registry, tables):
+            validate_all_metrics(registry, tables)  # G4: validate every semantic preflight; no memo
+            hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
+        else:
+            # The registry is for a different domain. Governance is inert here rather than fatal;
+            # traced so an inert semantic layer is visible instead of silently indistinguishable
+            # from "no metric matched this question".
+            ungoverned_schema = True
     # Governance precision: only alias (exact governed-term) hits BIND -- they drive the MUST-apply
     # prompt metrics AND become protected anchors. Dense hits are discovery/telemetry only: a fuzzy
     # similarity must never inject MUST filters or protect required_tables over a plain structural
@@ -166,6 +174,8 @@ def _preflight_context(state: AgentState) -> dict:
             "clarification_options": [o["label"] for o in options],
         }],
     }
+    if ungoverned_schema:
+        out["trace"][0]["governance"] = "registry_does_not_govern_schema"
     if not state.get("hitl"):
         out["tables"] = tables
     return out
@@ -297,16 +307,17 @@ def _query_enhance(state: AgentState, config=None) -> dict:
 
 def _retrieval_config(state: AgentState) -> RetrievalConfig:
     """The RetrievalConfig driving this run. ``run_agent``/``start_agent_session`` always
-    inject ``retrieval_config_serialized`` (defaulting to ``current_hybrid``), so this only
-    falls back to ``current_hybrid`` directly for a handful of unit tests that call
+    inject ``retrieval_config_serialized`` (defaulting to ``RetrievalConfig.default()``), so this
+    only falls back to the canonical default directly for a handful of unit tests that call
     ``_schema_recall``/``_table_relation`` with a hand-built state dict."""
     serialized = state.get("retrieval_config_serialized")
-    return deserialize_config(serialized) if serialized else RetrievalConfig.current_hybrid()
+    return deserialize_config(serialized) if serialized else RetrievalConfig.default()
 
 
 def _schema_recall(state: AgentState, config=None) -> dict:
-    """Retrieval via the typed pipeline. current_hybrid (default) reproduces today's hybrid recall +
-    one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate top-k. The rendered
+    """Retrieval via the typed pipeline. The legacy_minmax comparator reproduces the pre-migration
+    hybrid recall + one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate
+    top-k on that path. Under the RRF default retrieved_tables is the selected anchor set. The rendered
     prompt set is relation_plan.context_tables (which equals it for RRF and equals the one-hop closure
     for legacy). Empty recall -> feasibility owns the refusal, exactly as before.
 
@@ -935,9 +946,9 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
 
 
 def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
-              tables=None, semantic_layer: bool = False,
+              tables=None, semantic_layer: bool = True,
               threshold: float = 0.5, clarify: bool = True,
-              retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+              retrieval_config: RetrievalConfig = RetrievalConfig.default(),
               value_backend=None) -> AnswerResult:
     """Invoke the compiled graph and map the final state to an AnswerResult. ``value_backend`` is
     an optional value-search backend (protocol) for value retrieval configs; None -> the pipeline
@@ -965,10 +976,10 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
 
 
 def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5,
-                        tables=None, semantic_layer: bool = False,
+                        tables=None, semantic_layer: bool = True,
                         threshold: float = 0.5,
                         thread_id: str | None = None,
-                        retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+                        retrieval_config: RetrievalConfig = RetrievalConfig.default(),
                         value_backend=None
                         ) -> tuple[str, AnswerResult | dict]:
     """Start a HITL-capable run. Returns ``(thread_id, result_or_interrupt)``.

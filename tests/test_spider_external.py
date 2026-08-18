@@ -164,8 +164,8 @@ def _record(name, index, matched, *, candidate_recall=1.0, context_recall=1.0, n
 
 def test_summary_applies_paired_preregistered_gate():
     records = [
-        _record("current_hybrid", 1, True),
-        _record("current_hybrid", 2, False, candidate_recall=0.5, context_recall=0.5),
+        _record("legacy_minmax", 1, True),
+        _record("legacy_minmax", 2, False, candidate_recall=0.5, context_recall=0.5),
         _record("rrf_hybrid", 1, True),
         _record("rrf_hybrid", 2, True),
     ]
@@ -201,7 +201,7 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
     )
     assert len(output["records"]) == 2
     assert [row["retrieval_config"]["name"] for row in output["records"]] == [
-        "current_hybrid",
+        "legacy_minmax",
         "rrf_hybrid",
     ]
     # The tiny plural question deliberately exposes a real config difference: the legacy
@@ -210,3 +210,30 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
     serialized = json.dumps(output["records"])
     assert "How many pets?" not in serialized
     assert "gold_sql" not in serialized and "question" not in serialized
+
+
+# --- driver config selection ---------------------------------------------------------------
+
+def test_configs_default_to_the_published_pair():
+    from evals.spider_external import configs_from_names
+
+    assert [c.name for c in configs_from_names(None)] == ["legacy_minmax", "rrf_hybrid"]
+
+
+def test_configs_can_select_the_shipping_default_against_the_comparator():
+    from evals.spider_external import configs_from_names
+
+    pair = configs_from_names("legacy_minmax,governed_rrf")
+    assert [c.name for c in pair] == ["legacy_minmax", "governed_rrf"]
+    assert pair[1].lexical_backend == "bm25"
+
+
+def test_configs_rejects_a_bad_selection():
+    import pytest
+
+    from evals.spider_external import configs_from_names
+
+    with pytest.raises(ValueError):
+        configs_from_names("legacy_minmax")
+    with pytest.raises(ValueError):
+        configs_from_names("legacy_minmax,not_a_preset")

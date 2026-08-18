@@ -3,22 +3,23 @@ A column/value hit votes for its owner table via signal.table but keeps its targ
 from __future__ import annotations
 
 from agent.db.introspect import Table
-from agent.lexical_retriever import lexical_evidence
 from agent.retrieval.backends import DenseBackend
 from agent.retrieval.contracts import RetrievalSignal
+from agent.retrieval.lexical_backends import HandWeightedLexicalBackend, LexicalBackend
 from agent.retrieval.value_backend import ValueBackend
 from agent.retrieval.value_policy import resolve_searchable_columns
 
 
 class LexicalChannel:
+    """Boundary over a pluggable lexical backend (see lexical_backends.py). The channel owns the
+    seam; the backend owns the scoring. Defaults to the hand-weighted scorer so a direct
+    construction keeps the pre-boundary behaviour."""
+
+    def __init__(self, backend: LexicalBackend | None = None):
+        self._backend = backend or HandWeightedLexicalBackend()
+
     def signals(self, question: str, tables: list[Table]) -> list[RetrievalSignal]:
-        out: list[RetrievalSignal] = []
-        for hit in lexical_evidence(question, tables):
-            out.append(RetrievalSignal(
-                channel="lexical", target_type=hit.target_type, table=hit.table,
-                column=hit.column, query_term=hit.query_term,
-                raw_score=float(hit.weight), match_type=hit.match_type))
-        return out
+        return self._backend.signals(question, tables)
 
 
 class DenseChannel:

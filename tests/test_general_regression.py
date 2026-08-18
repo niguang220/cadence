@@ -31,13 +31,13 @@ def _cell(cid, category, config, sem, matched, n=5, **kw):
 def _synthetic_off():
     recs = []
     # traps: a dv win, a clean loss (dv<=ch-3), a soft loss, a tie
-    recs += _cell("trap_win", "mrr", "current_hybrid", False, 2) + _cell("trap_win", "mrr", "dense_value", False, 5)
-    recs += _cell("trap_clean", "arr", "current_hybrid", False, 5) + _cell("trap_clean", "arr", "dense_value", False, 1)
-    recs += _cell("trap_soft", "arpu", "current_hybrid", False, 5) + _cell("trap_soft", "arpu", "dense_value", False, 4)
-    recs += _cell("trap_tie", "mrr", "current_hybrid", False, 3) + _cell("trap_tie", "mrr", "dense_value", False, 3)
+    recs += _cell("trap_win", "mrr", "legacy_minmax", False, 2) + _cell("trap_win", "mrr", "dense_value", False, 5)
+    recs += _cell("trap_clean", "arr", "legacy_minmax", False, 5) + _cell("trap_clean", "arr", "dense_value", False, 1)
+    recs += _cell("trap_soft", "arpu", "legacy_minmax", False, 5) + _cell("trap_soft", "arpu", "dense_value", False, 4)
+    recs += _cell("trap_tie", "mrr", "legacy_minmax", False, 3) + _cell("trap_tie", "mrr", "dense_value", False, 3)
     # controls: one stable, one where dense_value regresses
-    recs += _cell("ctrl_ok", "control", "current_hybrid", False, 5) + _cell("ctrl_ok", "control", "dense_value", False, 5)
-    recs += _cell("ctrl_reg", "control", "current_hybrid", False, 5) + _cell("ctrl_reg", "control", "dense_value", False, 3)
+    recs += _cell("ctrl_ok", "control", "legacy_minmax", False, 5) + _cell("ctrl_ok", "control", "dense_value", False, 5)
+    recs += _cell("ctrl_reg", "control", "legacy_minmax", False, 5) + _cell("ctrl_reg", "control", "dense_value", False, 3)
     return recs
 
 
@@ -47,7 +47,7 @@ def test_paired_wins_losses_ties_and_clean_loss():
     assert (t["wins"], t["losses"], t["ties"]) == (1, 2, 1)
     assert t["clean_loss_ids"] == ["trap_clean"]                 # dv 1/5 <= ch 5/5 - 3
     assert t["regression_ids"] == ["trap_clean", "trap_soft"]
-    assert s["by_mode"]["off"]["traps"]["current_hybrid"]["matched"] == 15    # 2+5+5+3
+    assert s["by_mode"]["off"]["traps"]["legacy_minmax"]["matched"] == 15    # 2+5+5+3
     assert s["by_mode"]["off"]["traps"]["dense_value"]["matched"] == 13       # 5+1+4+3
 
 
@@ -103,10 +103,10 @@ def test_driver_runs_full_matrix_with_provenance(saas_db, monkeypatch):
                        model_name="fake", repeats=1, concurrency=1)
     # 2 cases x 2 configs x 2 semantic modes x 1 repeat = 8
     assert rep["n_records"] == 8
-    assert rep["configs"] == ["current_hybrid", "dense_value"]
-    assert [c["name"] for c in rep["config_provenance"]] == ["current_hybrid", "dense_value"]
+    assert rep["configs"] == ["legacy_minmax", "dense_value"]
+    assert [c["name"] for c in rep["config_provenance"]] == ["legacy_minmax", "dense_value"]
     assert len(rep["golden_sha256"]) == 64 and len(rep["frozen_config_sha256"]) == 64
-    assert {r["config"] for r in rep["records"]} == {"current_hybrid", "dense_value"}
+    assert {r["config"] for r in rep["records"]} == {"legacy_minmax", "dense_value"}
     assert {r["semantic_layer"] for r in rep["records"]} == {True, False}
     hr._INDEX_CACHE.clear()
 
@@ -138,4 +138,4 @@ def test_compact_records_carry_no_sql_or_question(saas_db, monkeypatch):
 
 
 def test_config_provenance_is_the_two_configs():
-    assert [c["name"] for c in config_provenance()] == ["current_hybrid", "dense_value"]
+    assert [c["name"] for c in config_provenance()] == ["legacy_minmax", "dense_value"]

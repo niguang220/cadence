@@ -20,8 +20,8 @@ pip install -e ".[dev]"
 # No LLM or API key. The embedding model may download on first use.
 cadence retrieve "revenue by plan"
 
-# Full agent. Requires DEEPSEEK_API_KEY.
-cadence ask --semantic-layer "How many active subscriptions do we have per region?"
+# Full agent. Requires DEEPSEEK_API_KEY. Semantic governance is on by default.
+cadence ask "How many active subscriptions do we have per region?"
 
 # Service-free test suite.
 pytest -q
@@ -54,17 +54,29 @@ python -m agent --retrieval-only "revenue by plan"
   stages.
 - A Docker sandbox for generated Python analysis.
 - A governed metric registry for definitions such as MRR and active users.
-- Lexical, dense, and Elasticsearch-backed value-retrieval channels behind typed contracts.
+- Lexical (BM25) and in-memory dense retrieval channels behind typed contracts, fused by
+  Weighted RRF on the default path; an Elasticsearch-backed value channel behind the same
+  contracts, opt-in.
 - Deterministic and real-API evaluation tiers with frozen fixtures, per-run provenance, paired
   controls, and failure attribution.
 
-The default runtime and CLI use `RetrievalConfig.current_hybrid()` (lexical + in-memory dense,
-legacy min-max fusion, one-hop relations). The value channel and RRF candidate are implemented
-and evaluated, but are opt-in and have **not** replaced the default.
+The default runtime and CLI use `RetrievalConfig.default()` — the `governed_rrf` preset: a
+BM25 lexical channel and an in-memory dense channel, typed aggregation, Weighted RRF fusion,
+deterministic Top-K selection, governed protected anchors when the semantic layer is on, and
+shortest-path relation planning. Semantic governance is on by default; pass
+`--no-semantic-layer` (CLI) or `semantic_layer=False` (Python) to opt out.
 
-Available CLI presets are `current_hybrid`, `lexical_baseline`, `rrf_hybrid`,
-`value_ablation`, and `dense_value`. `cadence retrieve ... --json` exposes the full typed
-retrieval result without calling an LLM.
+The lexical backend and the RRF channel weights were chosen by a deterministic, service-free
+matrix over `{hand-weighted, BM25} x {0.25, 0.5, 1.0}` lexical weight. On the frozen selection
+surfaces the six cells were indistinguishable, so the rule fell back to the standard external
+BM25 implementation at the neutral equal weighting rather than fitting a weight to a surface
+that could not measure it.
+
+Elasticsearch value retrieval remains opt-in. `legacy_minmax` preserves the previous min-max +
+one-hop implementation as a historical comparator for one release cycle; `current_hybrid` is a
+deprecated alias for it. Available CLI presets are `governed_rrf`, `lexical_baseline`,
+`rrf_hybrid`, `value_ablation`, `dense_value`, and `legacy_minmax`. `cadence retrieve ... --json`
+exposes the full typed retrieval result without calling an LLM.
 
 ## How a request flows
 
@@ -91,19 +103,26 @@ read-only execution, governance routing, and the sandbox boundary.
 ## Current evidence
 
 The numbers below answer different questions and should not be combined into one accuracy
-score.
+score. The three E2E rows predate the governed-RRF cutover: in them "default" means the
+**then-default** `current_hybrid`, now preserved as `legacy_minmax`. Their numbers and the
+conclusions reached at the time are kept as they were.
 
 | Evaluation | Result | Interpretation |
 | --- | --- | --- |
 | Deterministic gate fixture | 14/14 routes match the specification | A CI contract check (`by_construction`), not population accuracy |
-| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
-| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; no default cutover |
-| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs default 55/90, but lower context recall and 3 extra `no_sql` outcomes | Preregistered cutover gate failed; default unchanged |
+| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs then-default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
+| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; that candidate was not promoted at the time |
+| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs then-default 55/90, but lower context recall and 3 extra `no_sql` outcomes | The preregistered gate rejected that candidate at the time |
+| Governed-RRF cutover, 180 runs | `governed_rrf` 58/90 vs `legacy_minmax` 58/90; candidate recall 100.0% vs 96.1%; context recall 98.3% vs 100.0% | The absolute release gate passed; this is the run behind the current default |
 
 The value-sensitive comparison is documented in the
 [Stage 3B report](docs/reliability/2026-08-11-stage3b-current-hybrid-headtohead.md).
 The latest consolidated interpretation, including the general-mix run and open problems, is
 in [Project status](docs/STATUS.md).
+
+The cutover to the typed RRF default — the deterministic backend/weight matrix and the frozen
+full-agent gate run — is recorded in the
+[governed RRF cutover report](docs/reliability/2026-08-18-governed-rrf-cutover.md).
 
 The public-benchmark screen was frozen before execution and is documented in the
 [Spider preregistration](docs/reliability/2026-08-15-spider-external-preregistration.md) and
