@@ -61,9 +61,16 @@ class RetrievalConfig:
 
     @classmethod
     def governed_rrf(cls) -> "RetrievalConfig":
-        return cls(name="governed_rrf", lexical=True, dense_backend="memory",
-                   value_backend=None, selector=None, fusion="rrf",
-                   relation_strategy="shortest_path")
+        """The shipping default, selected by the deterministic backend/weight matrix.
+
+        BM25 at the neutral equal weighting: the frozen selection surfaces could not tell the six
+        cells apart, so the rule fell back to the standard maintained implementation at the
+        untuned weight rather than fitting a weight to a surface that could not measure it. The
+        matrix provenance records surfaces_discriminated=False for exactly this reason."""
+        return cls(name="governed_rrf", lexical=True, lexical_backend="bm25",
+                   dense_backend="memory", value_backend=None, selector=None, fusion="rrf",
+                   relation_strategy="shortest_path",
+                   lexical_weight=1.0, dense_weight=1.0)
 
     @classmethod
     def lexical_baseline(cls) -> "RetrievalConfig":

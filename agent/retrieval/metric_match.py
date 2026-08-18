@@ -21,6 +21,27 @@ def _validate_metric_deps(metric, names: set[str], cols: set[str]) -> None:
         raise ValueError(f"metric {metric.name!r}: unknown required column(s) {bad_c}")
 
 
+def registry_governs(registry, tables: list[Table]) -> bool:
+    """Does this metric registry govern this database at all?
+
+    The registry is domain-specific: on a foreign schema every metric's required tables are
+    absent. Treating that as a configuration error would make governance-on crash on any database
+    other than the one the registry was written for, so it is instead a statement about scope --
+    the registry does not govern this schema and governance is inert.
+
+    All-or-nothing on purpose: if SOME metrics resolve and others do not, the database IS governed
+    and the unresolved ones are real misconfiguration, so ``validate_all_metrics`` must still
+    fail fast."""
+    names, cols = _catalog(tables)
+    for m in registry.metrics:
+        try:
+            _validate_metric_deps(m, names, cols)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def validate_all_metrics(registry, tables: list[Table]) -> None:
     """G4: fail-fast on ANY invalid governed metric (matched or not). Performs NO retrieval, so it
     does not violate single-retrieval ownership. Safe to call once per catalog fingerprint."""

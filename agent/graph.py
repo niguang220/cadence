@@ -69,7 +69,8 @@ from agent.python_step import analyze_python_output, generate_python
 from agent.query_enhance import enhance_query
 from agent.retrieval.contracts import RetrievalConfig
 from agent.retrieval.grounding import value_grounding_block
-from agent.retrieval.metric_match import deserialize_hits, serialize_hits, validate_all_metrics
+from agent.retrieval.metric_match import (deserialize_hits, registry_governs, serialize_hits,
+                                          validate_all_metrics)
 from agent.retrieval.pipeline import run_retrieval
 from agent.retrieval.serde import (deserialize_config, deserialize_result, serialize_config,
                                     serialize_result)
@@ -141,10 +142,17 @@ def _preflight_context(state: AgentState) -> dict:
     tables = state.get("tables") or introspect(state["db_path"])
     thresh = state.get("threshold", 0.5)
     hits = []
+    ungoverned_schema = False
     if state.get("semantic_layer"):
         registry = _metric_registry()
-        validate_all_metrics(registry, tables)      # G4: validate every semantic preflight; no memo
-        hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
+        if registry_governs(registry, tables):
+            validate_all_metrics(registry, tables)  # G4: validate every semantic preflight; no memo
+            hits = registry.retrieve_matches(state["question"], threshold=thresh)  # the ONLY retrieval
+        else:
+            # The registry is for a different domain. Governance is inert here rather than fatal;
+            # traced so an inert semantic layer is visible instead of silently indistinguishable
+            # from "no metric matched this question".
+            ungoverned_schema = True
     # Governance precision: only alias (exact governed-term) hits BIND -- they drive the MUST-apply
     # prompt metrics AND become protected anchors. Dense hits are discovery/telemetry only: a fuzzy
     # similarity must never inject MUST filters or protect required_tables over a plain structural
@@ -166,6 +174,8 @@ def _preflight_context(state: AgentState) -> dict:
             "clarification_options": [o["label"] for o in options],
         }],
     }
+    if ungoverned_schema:
+        out["trace"][0]["governance"] = "registry_does_not_govern_schema"
     if not state.get("hitl"):
         out["tables"] = tables
     return out
@@ -936,7 +946,7 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
 
 
 def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
-              tables=None, semantic_layer: bool = False,
+              tables=None, semantic_layer: bool = True,
               threshold: float = 0.5, clarify: bool = True,
               retrieval_config: RetrievalConfig = RetrievalConfig.default(),
               value_backend=None) -> AnswerResult:
@@ -966,7 +976,7 @@ def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
 
 
 def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5,
-                        tables=None, semantic_layer: bool = False,
+                        tables=None, semantic_layer: bool = True,
                         threshold: float = 0.5,
                         thread_id: str | None = None,
                         retrieval_config: RetrievalConfig = RetrievalConfig.default(),

@@ -2,7 +2,7 @@
 
 **Last reviewed:** 2026-08-15  
 **Current release stage:** engineering testbed / pre-release 0.1  
-**Shipping retrieval preset:** `current_hybrid`
+**Shipping retrieval preset:** `governed_rrf` (BM25 lexical + in-memory dense, Weighted RRF, shortest-path relations; semantic governance on by default)
 
 This page is the canonical summary of what is complete, what the measurements support, and
 what remains before Cadence can be presented as more than a repository-owned prototype.
@@ -17,7 +17,7 @@ what remains before Cadence can be presented as more than a repository-owned pro
 | Clarification and plan approval | Implemented | In-memory checkpoint and runtime registries |
 | Python analysis sandbox | Implemented | Local Docker one-shot execution |
 | Governed metric registry | Implemented | Metrics only; entity and relationship contracts remain partial |
-| Typed retrieval pipeline | Implemented | Default still uses the legacy-compatible fusion path |
+| Typed retrieval pipeline | Implemented and shipping as the default | `legacy_minmax` retained one cycle as a historical comparator |
 | Elasticsearch value channel | Implemented, integration-tested, and exposed in the CLI | Requires an external ES service and explicit `index-values` ingestion |
 | Reliability harness | Implemented | Most fixtures are small and repository-owned |
 | Public benchmark | 30-case Spider screen completed | Custom execution oracle; screening slice, not a leaderboard result |
@@ -117,8 +117,21 @@ Evidence: [preregistration](reliability/2026-08-15-spider-external-preregistrati
 
 ## Current decision
 
-Keep `current_hybrid` as the default. Keep `dense_value` as an evaluated, opt-in candidate. Do not
-add a new backend or selector until the failed out-of-sample RRF gate is localized.
+The shipping default is `governed_rrf`: the typed RRF path is now the real product path rather
+than an opt-in candidate. The lexical backend and RRF channel weights were fixed by a
+deterministic, service-free matrix; the frozen surfaces could not distinguish the six cells, so
+the standard BM25 implementation at the neutral equal weighting was taken rather than a weight
+fitted to a surface that could not measure it.
+
+Semantic governance is on by default on the Python API, the CLI, and the demo, with an explicit
+opt-out. Where the metric registry does not govern a database at all, governance is inert and
+traced rather than fatal.
+
+`legacy_minmax` preserves the previous min-max + one-hop implementation for one release cycle as
+a historical comparator, and `current_hybrid` remains as a deprecated alias. Elasticsearch value
+retrieval stays opt-in. No LLM selector, reranker, or new vector backend was added.
+
+The measured sections above predate this cutover and keep their original configuration names.
 
 ## Next work, in order
 

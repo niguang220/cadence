@@ -20,8 +20,8 @@ pip install -e ".[dev]"
 # No LLM or API key. The embedding model may download on first use.
 cadence retrieve "revenue by plan"
 
-# Full agent. Requires DEEPSEEK_API_KEY.
-cadence ask --semantic-layer "How many active subscriptions do we have per region?"
+# Full agent. Requires DEEPSEEK_API_KEY. Semantic governance is on by default.
+cadence ask "How many active subscriptions do we have per region?"
 
 # Service-free test suite.
 pytest -q
@@ -54,17 +54,29 @@ python -m agent --retrieval-only "revenue by plan"
   stages.
 - A Docker sandbox for generated Python analysis.
 - A governed metric registry for definitions such as MRR and active users.
-- Lexical, dense, and Elasticsearch-backed value-retrieval channels behind typed contracts.
+- Lexical (BM25) and in-memory dense retrieval channels behind typed contracts, fused by
+  Weighted RRF on the default path; an Elasticsearch-backed value channel behind the same
+  contracts, opt-in.
 - Deterministic and real-API evaluation tiers with frozen fixtures, per-run provenance, paired
   controls, and failure attribution.
 
-The default runtime and CLI use `RetrievalConfig.current_hybrid()` (lexical + in-memory dense,
-legacy min-max fusion, one-hop relations). The value channel and RRF candidate are implemented
-and evaluated, but are opt-in and have **not** replaced the default.
+The default runtime and CLI use `RetrievalConfig.default()` — the `governed_rrf` preset: a
+BM25 lexical channel and an in-memory dense channel, typed aggregation, Weighted RRF fusion,
+deterministic Top-K selection, governed protected anchors when the semantic layer is on, and
+shortest-path relation planning. Semantic governance is on by default; pass
+`--no-semantic-layer` (CLI) or `semantic_layer=False` (Python) to opt out.
 
-Available CLI presets are `current_hybrid`, `lexical_baseline`, `rrf_hybrid`,
-`value_ablation`, and `dense_value`. `cadence retrieve ... --json` exposes the full typed
-retrieval result without calling an LLM.
+The lexical backend and the RRF channel weights were chosen by a deterministic, service-free
+matrix over `{hand-weighted, BM25} x {0.25, 0.5, 1.0}` lexical weight. On the frozen selection
+surfaces the six cells were indistinguishable, so the rule fell back to the standard maintained
+BM25 implementation at the neutral equal weighting rather than fitting a weight to a surface
+that could not measure it.
+
+Elasticsearch value retrieval remains opt-in. `legacy_minmax` preserves the previous min-max +
+one-hop implementation as a historical comparator for one release cycle; `current_hybrid` is a
+deprecated alias for it. Available CLI presets are `governed_rrf`, `lexical_baseline`,
+`rrf_hybrid`, `value_ablation`, `dense_value`, and `legacy_minmax`. `cadence retrieve ... --json`
+exposes the full typed retrieval result without calling an LLM.
 
 ## How a request flows
 
