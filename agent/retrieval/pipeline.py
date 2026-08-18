@@ -15,6 +15,7 @@ from agent.retrieval.contracts import (RelationPlan, RetrievalConfig, RetrievalR
                                         RetrievalStageEvent, SelectionDecision,
                                         UnsupportedRetrievalCapability)
 from agent.retrieval.fusion import legacy_candidates, weighted_rrf
+from agent.retrieval.lexical_backends import lexical_backend_for
 from agent.retrieval.metric_match import MetricMatchProvider
 from agent.retrieval.relation import legacy_one_hop_plan, plan_relations
 from agent.retrieval.selector import NoOpSelector, TopKSelector, protected_anchors
@@ -110,7 +111,7 @@ def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=
     channel_results = {}
 
     if config.lexical:
-        lex = LexicalChannel().signals(question, tables)
+        lex = LexicalChannel(lexical_backend_for(config.lexical_backend)).signals(question, tables)
         signals += lex
         if lex:
             channel_results["lexical"] = aggregate("lexical", lex)

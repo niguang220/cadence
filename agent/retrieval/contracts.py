@@ -17,6 +17,9 @@ class UnsupportedRetrievalCapability(Exception):
 class RetrievalConfig:
     name: str
     lexical: bool = True
+    # WHICH lexical scorer runs behind LexicalChannel. "hand_weighted" is the original
+    # hand-curated scorer, kept as the comparison arm; "bm25" is the standard in-memory BM25.
+    lexical_backend: Literal["hand_weighted", "bm25"] = "hand_weighted"
     dense_backend: Literal["memory", "qdrant"] | None = "memory"
     value_backend: Literal["es"] | None = None
     selector: Literal["llm"] | None = None
