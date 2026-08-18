@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 
@@ -29,6 +29,25 @@ class RetrievalConfig:
     context_anchor_k: int = 5
     rrf_constant: int = 60
     max_bridge_hops: int = 3
+    # Per-channel Weighted-RRF weights. Weighted RRF always accepted these; making them
+    # configuration is what lets a chosen weighting actually ship. Both must stay positive:
+    # a zero lexical weight is dense-only ranking, not hybrid fusion.
+    lexical_weight: float = 1.0
+    dense_weight: float = 1.0
+
+    def with_weights(self, *, lexical: float, dense: float) -> "RetrievalConfig":
+        """Return a copy carrying explicit channel weights. Rejects a non-positive weight so a
+        degenerate single-channel ranking cannot be produced by configuration."""
+        if lexical <= 0 or dense <= 0:
+            raise ValueError(
+                f"channel weights must be positive (got lexical={lexical}, dense={dense}); "
+                "a zero weight is single-channel ranking, not hybrid fusion")
+        return replace(self, lexical_weight=float(lexical), dense_weight=float(dense))
+
+    def channel_weights(self) -> dict[str, float]:
+        """Weights as weighted_rrf consumes them. The value channel is opt-in and not part of
+        the weighting decision, so it stays at the neutral 1.0."""
+        return {"lexical": self.lexical_weight, "dense": self.dense_weight, "value": 1.0}
 
     @classmethod
     def default(cls) -> "RetrievalConfig":

@@ -151,6 +151,7 @@ def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=
         return [], SelectionDecision([], [], "topk", {}), signals, events, True
 
     candidates = weighted_rrf(channel_results, rrf_constant=config.rrf_constant,
+                              weights=config.channel_weights(),
                               candidate_k=config.candidate_k)
     protected = protected_anchors(matches)                        # RRF only (B)
     selector = NoOpSelector() if len(candidates) <= config.context_anchor_k else TopKSelector()
