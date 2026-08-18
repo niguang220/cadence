@@ -36,7 +36,9 @@ streamlit run demo/app.py
 
 The demo shows the generated SQL, execution result, pipeline trace, usage, governance
 decisions, and semantic-layer ON/OFF comparison. It runs the real agent; the answers are not
-hard-coded.
+hard-coded. It reports four distinct outcomes — answered, needs clarification, refused, and
+blocked by governance — and shows the pipeline trace for all of them. It runs one
+non-interactive turn per question and does not offer clarification resume.
 
 The original module form remains compatible:
 
@@ -50,8 +52,10 @@ python -m agent --retrieval-only "revenue by plan"
 - A bounded LangGraph workflow for intent routing, clarification, schema retrieval, planning,
   SQL generation, execution, validation, repair, and optional Python analysis.
 - Read-only SQL enforcement with both AST checks and a SQLite authorizer.
-- PII column and result governance, routed so blocked data cannot reach later LLM or Python
-  stages.
+- PII handling in two layers: columns marked PII are withheld from the schema rendered to the
+  model — including via the `get_schema` tool — so the default path normally cannot write a query
+  naming one. Column-level SQL and result governance sit behind that as defence in depth, routed
+  so blocked data cannot reach later LLM or Python stages.
 - A Docker sandbox for generated Python analysis.
 - A governed metric registry for definitions such as MRR and active users.
 - Lexical (BM25) and in-memory dense retrieval channels behind typed contracts, fused by
@@ -81,13 +85,18 @@ exposes the full typed retrieval result without calling an LLM.
 ## How a request flows
 
 ```mermaid
-flowchart LR
-  Q[Question] --> I{Intent / clarification}
-  I -->|out of scope| R[Refuse with reason]
-  I --> E[Query enhancement]
+flowchart TD
+  Q[Question] --> I{Intent routing}
+  I -->|greeting / meta| R[Refuse with reason]
+  I --> C{Clarification}
+  C -->|ambiguous| K[Ask which metric]
+  C --> E[Query enhancement]
   E --> S[Schema + metric retrieval]
-  S --> P[Plan]
+  S --> F{Feasibility}
+  F -->|nothing relevant recalled| R
+  F --> P[Plan]
   P --> G[Generate SQL]
+  G -->|cannot answer| R
   G --> A{Safety + governance}
   A -->|blocked| R
   A --> X[Read-only execution]
@@ -96,9 +105,19 @@ flowchart LR
   V --> O[Answer or sandboxed Python step]
 ```
 
+Intent routing is a cheap deterministic guard for greetings and meta-questions, not a topic
+classifier. An out-of-domain question passes it, is rewritten by query enhancement, and is
+refused by the **feasibility** gate once schema retrieval comes back empty — so an off-topic
+question does cost one model call before it is declined.
+
 Model-backed stages propose interpretations, plans, SQL, consistency judgments, and Python.
 Deterministic code owns the enforceable boundaries: allowed plan shapes, retry budgets,
 read-only execution, governance routing, and the sandbox boundary.
+
+Clarification is deterministic and is asked, not guessed. The public Streamlit demo runs a
+single non-interactive turn: there is no session resume, so a clarification is shown and the
+question has to be edited and resubmitted. Interrupt-based clarification and plan approval exist
+as library APIs with tests, but have no public interaction surface.
 
 ## Current evidence
 
@@ -192,8 +211,10 @@ Add `--json` to `retrieve` or `index-values` for machine-readable output. The sa
   operate Elasticsearch itself.
 - The semantic layer governs a metric registry, not yet a complete declarative entity and
   relationship model.
-- HITL state and runtime model/backend registries are in memory and intended for the local
-  demo, not a distributed service.
+- HITL clarification and plan approval exist as library APIs (`start_agent_session` /
+  `resume_agent_session`) with tests, but no public entry point drives them: the CLI and the
+  Streamlit demo both run a single non-interactive turn. Their state and the runtime
+  model/backend registries are in memory and intended for local use, not a distributed service.
 - There is no multi-tenancy, row-level access control, warehouse identity, or schema migration
   lifecycle.
 
