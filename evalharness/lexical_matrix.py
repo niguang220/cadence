@@ -15,7 +15,7 @@ Surfaces, chosen so the matrix never asks semantic-OFF retrieval for knowledge i
   it exists to verify the protected-anchor invariant (selection/context recall == 1.0).
 
 Selection eliminates on regressions and invariants first and only then prefers; BM25 wins ties by
-policy, because a standard maintained implementation is preferred over a bespoke scorer unless the
+policy, because an established external implementation is preferred over a bespoke scorer unless the
 bespoke one is measurably better.
 """
 from __future__ import annotations

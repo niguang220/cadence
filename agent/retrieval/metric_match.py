@@ -21,25 +21,33 @@ def _validate_metric_deps(metric, names: set[str], cols: set[str]) -> None:
         raise ValueError(f"metric {metric.name!r}: unknown required column(s) {bad_c}")
 
 
+def registry_footprint(registry) -> set[str]:
+    """Every table the registry governs, across all of its metrics."""
+    return {table for m in registry.metrics for table in m.required_tables}
+
+
 def registry_governs(registry, tables: list[Table]) -> bool:
-    """Does this metric registry govern this database at all?
+    """Does this metric registry apply to this database at all?
 
-    The registry is domain-specific: on a foreign schema every metric's required tables are
-    absent. Treating that as a configuration error would make governance-on crash on any database
-    other than the one the registry was written for, so it is instead a statement about scope --
-    the registry does not govern this schema and governance is inert.
+    APPLICABILITY is decided on the registry's whole ``required_tables`` footprint: a non-empty
+    registry applies only when the schema contains EVERY table it governs. VALIDATION of required
+    columns and governance metadata is a separate concern and stays fail-fast in
+    ``validate_all_metrics``.
 
-    All-or-nothing on purpose: if SOME metrics resolve and others do not, the database IS governed
-    and the unresolved ones are real misconfiguration, so ``validate_all_metrics`` must still
-    fail fast."""
-    names, cols = _catalog(tables)
-    for m in registry.metrics:
-        try:
-            _validate_metric_deps(m, names, cols)
-            return True
-        except ValueError:
-            continue
-    return False
+    Tables alone, and the whole footprint, both matter. The registry is domain-specific, but its
+    table names are not exotic -- ``account`` and ``subscription`` occur in plenty of unrelated
+    schemas. Claiming the database as soon as ONE metric resolves would let an ordinary foreign
+    database be treated as governed and then crash on the metrics it cannot satisfy. Requiring the
+    full footprint makes a partial match mean what it should: this registry is for a different
+    database, so the semantic layer is inert here (the caller traces the degradation).
+
+    Once the footprint is covered the database IS governed, and a missing required column or bad
+    governance metadata is then real misconfiguration rather than a foreign schema -- which is
+    exactly the case ``validate_all_metrics`` must keep failing on."""
+    footprint = registry_footprint(registry)
+    if not footprint:
+        return False
+    return footprint <= {t.name for t in tables}
 
 
 def validate_all_metrics(registry, tables: list[Table]) -> None:

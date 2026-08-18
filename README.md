@@ -68,7 +68,7 @@ shortest-path relation planning. Semantic governance is on by default; pass
 
 The lexical backend and the RRF channel weights were chosen by a deterministic, service-free
 matrix over `{hand-weighted, BM25} x {0.25, 0.5, 1.0}` lexical weight. On the frozen selection
-surfaces the six cells were indistinguishable, so the rule fell back to the standard maintained
+surfaces the six cells were indistinguishable, so the rule fell back to the standard external
 BM25 implementation at the neutral equal weighting rather than fitting a weight to a surface
 that could not measure it.
 
@@ -103,14 +103,17 @@ read-only execution, governance routing, and the sandbox boundary.
 ## Current evidence
 
 The numbers below answer different questions and should not be combined into one accuracy
-score.
+score. The three E2E rows predate the governed-RRF cutover: in them "default" means the
+**then-default** `current_hybrid`, now preserved as `legacy_minmax`. Their numbers and the
+conclusions reached at the time are kept as they were.
 
 | Evaluation | Result | Interpretation |
 | --- | --- | --- |
 | Deterministic gate fixture | 14/14 routes match the specification | A CI contract check (`by_construction`), not population accuracy |
-| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
-| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; no default cutover |
-| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs default 55/90, but lower context recall and 3 extra `no_sql` outcomes | Preregistered cutover gate failed; default unchanged |
+| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs then-default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
+| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; that candidate was not promoted at the time |
+| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs then-default 55/90, but lower context recall and 3 extra `no_sql` outcomes | The preregistered gate rejected that candidate at the time |
+| Governed-RRF cutover, 180 runs | `governed_rrf` 58/90 vs `legacy_minmax` 58/90; candidate recall 100.0% vs 96.1%; context recall 98.3% vs 100.0% | The absolute release gate passed; this is the run behind the current default |
 
 The value-sensitive comparison is documented in the
 [Stage 3B report](docs/reliability/2026-08-11-stage3b-current-hybrid-headtohead.md).

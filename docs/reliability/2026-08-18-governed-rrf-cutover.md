@@ -30,7 +30,7 @@ differences were in mean rendered context tables, at the 0.03-table level — on
 the rule treats as noise rather than a measured advantage.
 
 **Selected: `bm25` at lexical weight 1.0, dense weight 1.0**, by the policy of preferring a
-standard maintained implementation absent a clear measured advantage, and then the neutral
+standard external implementation absent a clear measured advantage, and then the neutral
 untuned weight. Provenance records `surfaces_discriminated: false`: the weight is the untuned
 equal weighting, **not** a value fitted to these surfaces. Reading it as a tuned optimum would
 overstate what was measured.

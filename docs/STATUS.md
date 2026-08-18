@@ -1,6 +1,6 @@
 # Cadence project status
 
-**Last reviewed:** 2026-08-15  
+**Last reviewed:** 2026-08-18  
 **Current release stage:** engineering testbed / pre-release 0.1  
 **Shipping retrieval preset:** `governed_rrf` (BM25 lexical + in-memory dense, Weighted RRF, shortest-path relations; semantic governance on by default)
 
@@ -45,6 +45,10 @@ the opt-in integration workflow.
 
 ## What the measured runs say
 
+These runs predate the governed-RRF cutover. They keep their original configuration names,
+numbers, and the conclusions reached at the time. Throughout this section `current_hybrid`
+is the **then-default**, now preserved as `legacy_minmax` and no longer the shipping preset.
+
 ### 1. Value-sensitive E2E: targeted gate passed
 
 The Stage 3B run used real DeepSeek and Elasticsearch over four retrieval configurations,
@@ -52,7 +56,7 @@ The Stage 3B run used real DeepSeek and Elasticsearch over four retrieval config
 
 | Configuration | Execution match | Candidate recall | Context recall |
 | --- | ---: | ---: | ---: |
-| `current_hybrid` (default) | 13/50 (26%) | 0.30 | 0.40 |
+| `current_hybrid` (then-default) | 13/50 (26%) | 0.30 | 0.40 |
 | `rrf_hybrid` | 9/50 (18%) | 0.40 | 0.35 |
 | `value_ablation` | 28/50 (56%) | 0.70 | 0.75 |
 | `dense_value` | **32/50 (64%)** | **1.00** | **0.90** |
@@ -64,14 +68,14 @@ accuracy because the fixture was deliberately value-sensitive.
 Evidence: [Stage 3B report](reliability/2026-08-11-stage3b-current-hybrid-headtohead.md) and
 [GitHub Actions run 31464161544](https://github.com/niguang220/cadence/actions/runs/31464161544).
 
-### 2. General-mix E2E: no default cutover yet
+### 2. General-mix E2E: the candidate was not promoted at the time
 
 Stage 3C compared `current_hybrid` and `dense_value` on the 30-case SaaS metric set, semantic
 layer ON and OFF, with 5 repeats: 600 real-agent records. The schema has no searchable columns,
 so the value channel was inert; this comparison isolates RRF + shortest-path relations against
 legacy min-max + one-hop relations.
 
-| Mode | `current_hybrid` | `dense_value` | Paired case result |
+| Mode | `current_hybrid` (then-default) | `dense_value` | Paired case result |
 | --- | ---: | ---: | --- |
 | Semantic OFF, 24 metric cases | 13/120 (10.8%) | 10/120 (8.3%) | 0 wins / 2 losses / 22 ties |
 | Semantic ON, 24 metric cases | 93/120 (77.5%) | **101/120 (84.2%)** | 6 wins / 5 losses / 13 ties |
@@ -79,7 +83,8 @@ legacy min-max + one-hop relations.
 
 The candidate improved the semantic-ON aggregate, but it also produced five case-level losses,
 including one clean loss. Its selector dropped at least one gold table in 35 records. That is
-not a clean production promotion signal, so `current_hybrid` remains the default.
+not a clean production promotion signal, so the then-default `current_hybrid` was kept at the
+time. That decision has since been superseded by the governed-RRF cutover.
 
 Evidence: [GitHub Actions run 31473517414](https://github.com/niguang220/cadence/actions/runs/31473517414).
 The raw JSON artifact is retained outside Git under the repository's artifact policy.
@@ -97,20 +102,22 @@ This suggests equal-weight RRF can demote useful dense hits. It does **not** jus
 production weight: the hypothesis was generated and measured on repository-owned data and needs
 validation on a separate or public set.
 
-### 4. Spider external screen: RRF did not pass the cutover gate
+### 4. Spider external screen: the preregistered gate rejected that candidate at the time
 
 A preregistered Spider dev slice compared `current_hybrid` and `rrf_hybrid` over 30 examples,
 15 unseen databases, and 3 repeats: 180 full-agent records with no skips.
 
 | Configuration | Execution match | Candidate recall | Context recall | `no_sql` |
 | --- | ---: | ---: | ---: | ---: |
-| `current_hybrid` | 55/90 (61.1%) | 96.1% | **100.0%** | **6** |
+| `current_hybrid` (then-default) | 55/90 (61.1%) | 96.1% | **100.0%** | **6** |
 | `rrf_hybrid` | **56/90 (62.2%)** | **100.0%** | 98.3% | 9 |
 
 RRF was ahead by one execution match and the paired comparison was 3 wins / 2 losses / 25 ties,
 but it failed two locked conditions: context recall regressed and `no_sql` exceeded the allowed
-increase. This is useful negative evidence, not a default-promotion result. The dominant absolute
-failure class was still downstream answer mismatch with mostly complete table context.
+increase. The preregistered gate rejected that candidate at the time; this is useful negative evidence,
+not a default-promotion result. The dominant absolute failure class was still downstream
+answer mismatch with mostly complete table context. A later run under the absolute release
+gate is recorded in the cutover report linked below.
 
 Evidence: [preregistration](reliability/2026-08-15-spider-external-preregistration.md) and
 [reviewed result](reliability/2026-08-15-spider-external-result.md).

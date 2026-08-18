@@ -1,7 +1,7 @@
 """The lexical backend boundary inside LexicalChannel, and the in-memory BM25 backend.
 
 Two backends must be interchangeable behind one seam: the existing hand-weighted scorer
-(kept as the comparison arm) and a standard maintained BM25 (rank_bm25). The invariants that
+(kept as the comparison arm) and a standard external BM25 (rank_bm25). The invariants that
 matter are (a) the hand-weighted arm stays byte-identical to the pre-boundary behaviour, and
 (b) BM25 preserves the admission-gate contract -- a table with no query-token overlap produces
 NO signal, so an off-topic question still has no lexical footing and is still refused.

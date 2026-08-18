@@ -6,7 +6,7 @@ Two backends exist deliberately:
 
 * ``HandWeightedLexicalBackend`` -- the project's original hand-curated scorer (table-name /
   column / sample-value weights plus a domain alias layer). Kept as the COMPARISON arm.
-* ``BM25LexicalBackend`` -- a standard, maintained in-memory BM25 (``rank_bm25``). No scoring
+* ``BM25LexicalBackend`` -- a standard external in-memory BM25 (``rank_bm25``). No scoring
   formula is written here; ranking is delegated to the library.
 
 Both share ``lexical_retriever._tokenize`` for normalisation and stopwords, so the arms differ

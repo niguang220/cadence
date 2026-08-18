@@ -64,7 +64,7 @@ class RetrievalConfig:
         """The shipping default, selected by the deterministic backend/weight matrix.
 
         BM25 at the neutral equal weighting: the frozen selection surfaces could not tell the six
-        cells apart, so the rule fell back to the standard maintained implementation at the
+        cells apart, so the rule fell back to the standard external implementation at the
         untuned weight rather than fitting a weight to a surface that could not measure it. The
         matrix provenance records surfaces_discriminated=False for exactly this reason."""
         return cls(name="governed_rrf", lexical=True, lexical_backend="bm25",
