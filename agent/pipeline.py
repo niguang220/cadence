@@ -25,7 +25,7 @@ def answer_question(
     semantic_layer: bool = False,
     threshold: float = 0.5,
     clarify: bool = True,
-    retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+    retrieval_config: RetrievalConfig = RetrievalConfig.default(),
     value_backend=None,
 ) -> AnswerResult:
     """Answer a question by running the agent graph. Pass ``model`` to inject a
@@ -54,7 +54,7 @@ def start_question_session(
     semantic_layer: bool = False,
     threshold: float = 0.5,
     thread_id: str | None = None,
-    retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+    retrieval_config: RetrievalConfig = RetrievalConfig.default(),
     value_backend=None,
 ) -> tuple[str, AnswerResult | dict]:
     """Start a LangGraph HITL-capable run.

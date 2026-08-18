@@ -297,16 +297,17 @@ def _query_enhance(state: AgentState, config=None) -> dict:
 
 def _retrieval_config(state: AgentState) -> RetrievalConfig:
     """The RetrievalConfig driving this run. ``run_agent``/``start_agent_session`` always
-    inject ``retrieval_config_serialized`` (defaulting to ``current_hybrid``), so this only
-    falls back to ``current_hybrid`` directly for a handful of unit tests that call
+    inject ``retrieval_config_serialized`` (defaulting to ``RetrievalConfig.default()``), so this
+    only falls back to the canonical default directly for a handful of unit tests that call
     ``_schema_recall``/``_table_relation`` with a hand-built state dict."""
     serialized = state.get("retrieval_config_serialized")
-    return deserialize_config(serialized) if serialized else RetrievalConfig.current_hybrid()
+    return deserialize_config(serialized) if serialized else RetrievalConfig.default()
 
 
 def _schema_recall(state: AgentState, config=None) -> dict:
-    """Retrieval via the typed pipeline. current_hybrid (default) reproduces today's hybrid recall +
-    one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate top-k. The rendered
+    """Retrieval via the typed pipeline. The legacy_minmax comparator reproduces the pre-migration
+    hybrid recall + one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate
+    top-k on that path. Under the RRF default retrieved_tables is the selected anchor set. The rendered
     prompt set is relation_plan.context_tables (which equals it for RRF and equals the one-hop closure
     for legacy). Empty recall -> feasibility owns the refusal, exactly as before.
 
@@ -937,7 +938,7 @@ def _to_answer(final: AgentState, usage: UsageCallback) -> AnswerResult:
 def run_agent(db_path: str | Path, question: str, *, model, k: int = 5,
               tables=None, semantic_layer: bool = False,
               threshold: float = 0.5, clarify: bool = True,
-              retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+              retrieval_config: RetrievalConfig = RetrievalConfig.default(),
               value_backend=None) -> AnswerResult:
     """Invoke the compiled graph and map the final state to an AnswerResult. ``value_backend`` is
     an optional value-search backend (protocol) for value retrieval configs; None -> the pipeline
@@ -968,7 +969,7 @@ def start_agent_session(db_path: str | Path, question: str, *, model, k: int = 5
                         tables=None, semantic_layer: bool = False,
                         threshold: float = 0.5,
                         thread_id: str | None = None,
-                        retrieval_config: RetrievalConfig = RetrievalConfig.current_hybrid(),
+                        retrieval_config: RetrievalConfig = RetrievalConfig.default(),
                         value_backend=None
                         ) -> tuple[str, AnswerResult | dict]:
     """Start a HITL-capable run. Returns ``(thread_id, result_or_interrupt)``.

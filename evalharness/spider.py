@@ -310,7 +310,7 @@ def _mean(records: list[SpiderRecord], field_name: str) -> float:
 
 
 def summarize_spider(
-    records: list[SpiderRecord], *, baseline: str = "current_hybrid", candidate: str = "rrf_hybrid"
+    records: list[SpiderRecord], *, baseline: str = "legacy_minmax", candidate: str = "rrf_hybrid"
 ) -> dict:
     """Aggregate two paired configurations and evaluate the preregistered gate."""
     grouped: dict[str, list[SpiderRecord]] = defaultdict(list)

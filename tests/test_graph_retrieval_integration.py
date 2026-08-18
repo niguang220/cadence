@@ -33,10 +33,10 @@ def _tables(tmp_path):
 
 def _legacy_state(tables, question, k=5):
     return {"question": question, "tables": tables, "k": k,
-            "retrieval_config_serialized": serialize_config(RetrievalConfig.current_hybrid())}
+            "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())}
 
 
-def test_current_hybrid_schema_and_join_hint_byte_identical(det_index, tmp_path):
+def test_legacy_minmax_schema_and_join_hint_byte_identical(det_index, tmp_path):
     tables = _tables(tmp_path)
     q = "total sales by billing country"
     # expected legacy output computed directly with the SAME deterministic index
@@ -56,7 +56,7 @@ def test_current_hybrid_schema_and_join_hint_byte_identical(det_index, tmp_path)
     assert got == expected                                        # COMPLETE schema + join-hint string
 
 
-def test_current_hybrid_refusal_on_offtopic(det_index, tmp_path):
+def test_legacy_minmax_refusal_on_offtopic(det_index, tmp_path):
     s = _schema_recall(_legacy_state(_tables(tmp_path), "what is the weather today"))
     assert s["retrieved_tables"] == [] and s["schema"] == ""
 
@@ -66,11 +66,27 @@ def test_runtime_k_honored(det_index, tmp_path):
     assert len(s["retrieved_tables"]) <= 2
 
 
-def test_run_agent_current_hybrid_populates_answerresult(det_index, tmp_path):
+def test_run_agent_default_populates_answerresult_via_the_rrf_path(det_index, tmp_path):
+    """The PUBLIC default path: no retrieval_config passed. Asserts the shipped default is the
+    typed RRF architecture -- real fusion scores and typed signals, not the legacy scaffold."""
     res = run_agent(str(build(tmp_path / "t.db")), "how many tracks are in each genre",
                     model=PlanningFakeModel("SELECT COUNT(*) FROM track"))
     assert res.retrieved_tables and res.answer and res.sql              # pre-existing fields intact
     assert res.retrieval_result is not None                             # reconstructed
+    rr = res.retrieval_result
+    assert rr.config_name == "governed_rrf"
+    assert rr.relation_plan.strategy == "shortest_path"
+    assert rr.signals, "the default path must emit typed retrieval signals"
+    assert all(c.fusion_score is not None for c in rr.candidates), "real RRF fusion scores"
+
+
+def test_run_agent_legacy_minmax_comparator_still_populates_answerresult(det_index, tmp_path):
+    """The retained historical comparator, reachable only by explicit opt-in."""
+    res = run_agent(str(build(tmp_path / "t.db")), "how many tracks are in each genre",
+                    model=PlanningFakeModel("SELECT COUNT(*) FROM track"),
+                    retrieval_config=RetrievalConfig.legacy_minmax())
+    assert res.retrieved_tables and res.answer and res.sql
+    assert res.retrieval_result is not None
     assert res.retrieval_result.relation_plan.strategy == "legacy_one_hop"
 
 

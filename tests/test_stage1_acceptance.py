@@ -44,7 +44,7 @@ def _demo(tmp_path): return introspect(build(tmp_path / "t.db"))
 def _saas(tmp_path): return introspect(build_saas(tmp_path / "s.db"))
 
 
-def test_accept_1_current_hybrid_parity_vs_legacy_oracle(det_index, tmp_path):
+def test_accept_1_legacy_minmax_parity_vs_legacy_oracle(det_index, tmp_path):
     tables = _demo(tmp_path)
     q = "total sales by billing country"
     top_k = retrieve(q, tables, k=5)                                  # legacy oracle
@@ -54,7 +54,7 @@ def test_accept_1_current_hybrid_parity_vs_legacy_oracle(det_index, tmp_path):
         hint = "\n".join(f"{p['from']}.{p['on']} = {p['to']}.{p['ref_on']}" for p in paths)
         expected = f"{expected}\n\nJoin paths:\n{hint}"
     state = {"question": q, "tables": tables, "k": 5,
-             "retrieval_config_serialized": serialize_config(RetrievalConfig.current_hybrid())}
+             "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())}
     s1 = _schema_recall(state)
     assert s1["retrieved_tables"] == top_k                           # candidate order + retrieved_tables
     s2 = _table_relation({**state, **s1})
@@ -65,7 +65,7 @@ def test_accept_1_current_hybrid_parity_vs_legacy_oracle(det_index, tmp_path):
     assert s_k3["retrieved_tables"] == top3
     # off-topic -> refusal (empty retrieved_tables + empty schema)
     s_off = _schema_recall({"question": "what is the weather today", "tables": tables, "k": 5,
-                            "retrieval_config_serialized": serialize_config(RetrievalConfig.current_hybrid())})
+                            "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())})
     assert s_off["retrieved_tables"] == [] and s_off["schema"] == ""
 
 
@@ -113,7 +113,7 @@ def test_accept_4_protected_anchor_survives_topk_and_legacy_telemetry(det_index,
     assert "account" not in rrf.selection.dropped_tables
     assert "user" in rrf.selection.dropped_tables                  # unprotected rank-6 -> pruned by TopK
     # legacy control: metric is telemetry only; account is NOT force-added.
-    legacy = run_retrieval("how many active subscriptions", saas, RetrievalConfig.current_hybrid(),
+    legacy = run_retrieval("how many active subscriptions", saas, RetrievalConfig.legacy_minmax(),
                            k=3, metric_hits=[hit])
     assert legacy.metric_matches and legacy.metric_matches[0].metric == "mrr"
     assert "account" not in legacy.selection.anchor_tables
@@ -142,7 +142,7 @@ def test_accept_6_graph_renders_context_tables_both_strategies(det_index, tmp_pa
     q = "total sales by billing country"
     # legacy_one_hop via the real graph node (det_index -> deterministic retrieve)
     state_l = {"question": q, "tables": tables, "k": 5,
-               "retrieval_config_serialized": serialize_config(RetrievalConfig.current_hybrid())}
+               "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())}
     s_l = _schema_recall(state_l)
     plan_l = deserialize_result(s_l["retrieval_result_serialized"]).relation_plan
     assert plan_l.strategy == "legacy_one_hop"

@@ -28,16 +28,42 @@ class RetrievalConfig:
     max_bridge_hops: int = 3
 
     @classmethod
+    def default(cls) -> "RetrievalConfig":
+        """THE canonical public retrieval default -- the single source every public entry
+        point constructs from. Changing the shipping default means changing this one method.
+
+        Governed typed RRF: lexical + in-memory dense channels, Weighted RRF fusion,
+        deterministic Top-K selection, protected anchors when governance is enabled, and
+        shortest-path relation planning. Elasticsearch value retrieval stays opt-in."""
+        return cls.governed_rrf()
+
+    @classmethod
+    def governed_rrf(cls) -> "RetrievalConfig":
+        return cls(name="governed_rrf", lexical=True, dense_backend="memory",
+                   value_backend=None, selector=None, fusion="rrf",
+                   relation_strategy="shortest_path")
+
+    @classmethod
     def lexical_baseline(cls) -> "RetrievalConfig":
         return cls(name="lexical_baseline", lexical=True, dense_backend=None,
                    value_backend=None, selector=None, fusion="rrf",
                    relation_strategy="shortest_path")
 
     @classmethod
-    def current_hybrid(cls) -> "RetrievalConfig":
-        return cls(name="current_hybrid", lexical=True, dense_backend="memory",
+    def legacy_minmax(cls) -> "RetrievalConfig":
+        """The preserved pre-migration retrieval implementation: min-max fusion over the
+        legacy hybrid retriever plus one-hop FK closure. Retained for one release cycle as
+        a historical comparator for already-published results. NOT a supported product mode
+        and never a default."""
+        return cls(name="legacy_minmax", lexical=True, dense_backend="memory",
                    value_backend=None, selector=None, fusion="legacy_minmax",
                    relation_strategy="legacy_one_hop")
+
+    @classmethod
+    def current_hybrid(cls) -> "RetrievalConfig":
+        """Deprecated alias for ``legacy_minmax`` kept for one release cycle so existing
+        callers keep working. Use ``legacy_minmax()`` (comparator) or ``default()`` (product)."""
+        return cls.legacy_minmax()
 
     @classmethod
     def rrf_hybrid(cls) -> "RetrievalConfig":

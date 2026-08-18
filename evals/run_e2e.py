@@ -37,7 +37,8 @@ _MAX_CONCURRENCY = 16
 # selectable here -- es/qdrant/llm-selector presets are deliberately out of scope this stage.
 _CONFIGS = {
     "lexical_baseline": RetrievalConfig.lexical_baseline,
-    "current_hybrid": RetrievalConfig.current_hybrid,
+    "legacy_minmax": RetrievalConfig.legacy_minmax,
+    "governed_rrf": RetrievalConfig.default,
     "rrf_hybrid": RetrievalConfig.rrf_hybrid,
 }
 

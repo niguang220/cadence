@@ -12,8 +12,8 @@ from evals.run_e2e import config_by_name, parse_args, report_path
 def test_config_by_name_maps_the_three_presets():
     assert serialize_config(config_by_name("lexical_baseline")) == \
         serialize_config(RetrievalConfig.lexical_baseline())
-    assert serialize_config(config_by_name("current_hybrid")) == \
-        serialize_config(RetrievalConfig.current_hybrid())
+    assert serialize_config(config_by_name("legacy_minmax")) == \
+        serialize_config(RetrievalConfig.legacy_minmax())
     assert serialize_config(config_by_name("rrf_hybrid")) == \
         serialize_config(RetrievalConfig.rrf_hybrid())
 
@@ -43,7 +43,7 @@ def test_report_path_includes_config_name(tmp_path):
     p = report_path("rrf_hybrid", "20260810_161500", report_dir=tmp_path)
     assert p.name == "e2e_baseline_rrf_hybrid_20260810_161500.json"
     # different configs at the same second get distinct, unambiguous filenames
-    other = report_path("current_hybrid", "20260810_161500", report_dir=tmp_path)
+    other = report_path("legacy_minmax", "20260810_161500", report_dir=tmp_path)
     assert other.name != p.name
     # still matches the .git/info/exclude glob docs/reliability/e2e_baseline_*.json
     assert p.name.startswith("e2e_baseline_") and p.name.endswith(".json")

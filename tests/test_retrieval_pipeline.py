@@ -105,7 +105,7 @@ def test_legacy_path_one_hop_and_metric_is_telemetry_only(tmp_path):
     # under test. k=3 keeps the deterministic hybrid_retrieve top-k away from "account" so the
     # "not force-added" assertion below is actually exercising the telemetry-only behavior.
     res = run_retrieval("how many subscriptions are there for each plan", _saas_tables(tmp_path),
-                        RetrievalConfig.current_hybrid(), k=3, metric_hits=[_mrr_hit()])
+                        RetrievalConfig.legacy_minmax(), k=3, metric_hits=[_mrr_hit()])
     assert res.relation_plan.strategy == "legacy_one_hop"
     assert res.metric_matches and res.metric_matches[0].metric == "mrr"      # carried as telemetry
     # legacy anchors are the retrieve() candidates; mrr's account/subscription are NOT force-added

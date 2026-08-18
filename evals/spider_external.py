@@ -29,7 +29,7 @@ from evalharness.spider import (
 
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
-_CONFIGS = (RetrievalConfig.current_hybrid(), RetrievalConfig.rrf_hybrid())
+_CONFIGS = (RetrievalConfig.legacy_minmax(), RetrievalConfig.rrf_hybrid())
 
 
 def parse_args(argv=None) -> argparse.Namespace:

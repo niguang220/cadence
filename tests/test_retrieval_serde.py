@@ -6,7 +6,7 @@ from agent.retrieval.serde import (deserialize_config, deserialize_result, seria
 
 
 def test_config_roundtrip():
-    for c in (RetrievalConfig.current_hybrid(), RetrievalConfig.rrf_hybrid(),
+    for c in (RetrievalConfig.legacy_minmax(), RetrievalConfig.rrf_hybrid(),
               RetrievalConfig.full_rag()):
         assert deserialize_config(serialize_config(c)) == c
 

@@ -164,8 +164,8 @@ def _record(name, index, matched, *, candidate_recall=1.0, context_recall=1.0, n
 
 def test_summary_applies_paired_preregistered_gate():
     records = [
-        _record("current_hybrid", 1, True),
-        _record("current_hybrid", 2, False, candidate_recall=0.5, context_recall=0.5),
+        _record("legacy_minmax", 1, True),
+        _record("legacy_minmax", 2, False, candidate_recall=0.5, context_recall=0.5),
         _record("rrf_hybrid", 1, True),
         _record("rrf_hybrid", 2, True),
     ]
@@ -201,7 +201,7 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
     )
     assert len(output["records"]) == 2
     assert [row["retrieval_config"]["name"] for row in output["records"]] == [
-        "current_hybrid",
+        "legacy_minmax",
         "rrf_hybrid",
     ]
     # The tiny plural question deliberately exposes a real config difference: the legacy
