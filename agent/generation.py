@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 
 from agent.execution import ExecutionResult
-from agent.prompts import SQL_SYSTEM_PROMPT
+from agent.prompts import CANNOT_ANSWER, SQL_SYSTEM_PROMPT
 from agent.retrieval.contracts import RetrievalResult
 
 _NO_QUERY = "(no query run)"
@@ -20,6 +20,12 @@ _NO_QUERY = "(no query run)"
 # Pull the contents out of the first ```...``` block; the model often wraps SQL
 # in a fence with prose around it ("Here's a query: ```sql ... ```").
 _FENCE_BLOCK = re.compile(r"```(?:sql)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
+
+# A refusal the model wrote as an explanation with the sentinel alone on its own line. Matching
+# is deliberately anchored to a WHOLE line (horizontal whitespace only either side): the token
+# appearing inside a sentence -- an explanation that mentions it, or a question asking about it
+# -- must never be turned into a refusal.
+_CANNOT_ANSWER_LINE = re.compile(r"(?im)^[^\S\r\n]*CANNOT_ANSWER[^\S\r\n]*$")
 
 
 def _extract_sql(text: str) -> str:
@@ -32,7 +38,16 @@ def _extract_sql(text: str) -> str:
     # execution see SQL, not prose (unstripped prose fails to parse and is misreported as a
     # governance violation). Prefer a keyword that starts a line; else the first anywhere.
     km = re.search(r"(?im)^\s*(?:WITH|SELECT)\b", text) or re.search(r"(?is)\b(?:WITH|SELECT)\b", text)
-    return text[km.start():].strip() if km else text
+    if km:
+        return text[km.start():].strip()
+    # No SQL anywhere, but the model signed its explanation off with the sentinel on its own
+    # line. Normalise to the bare sentinel so the generation step recognises this as the decline
+    # it is. Without this the explanation itself was returned as "SQL" and reached the governance
+    # parser, whose failure was then reported to the user as a governance violation.
+    # SQL keeps priority: this runs only after both checks above found none.
+    if _CANNOT_ANSWER_LINE.search(text):
+        return CANNOT_ANSWER
+    return text
 
 
 def generate_sql(question: str, schema: str, model, *, semantic_block: str = "") -> str:
