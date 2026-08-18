@@ -210,3 +210,30 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
     serialized = json.dumps(output["records"])
     assert "How many pets?" not in serialized
     assert "gold_sql" not in serialized and "question" not in serialized
+
+
+# --- driver config selection ---------------------------------------------------------------
+
+def test_configs_default_to_the_published_pair():
+    from evals.spider_external import configs_from_names
+
+    assert [c.name for c in configs_from_names(None)] == ["legacy_minmax", "rrf_hybrid"]
+
+
+def test_configs_can_select_the_shipping_default_against_the_comparator():
+    from evals.spider_external import configs_from_names
+
+    pair = configs_from_names("legacy_minmax,governed_rrf")
+    assert [c.name for c in pair] == ["legacy_minmax", "governed_rrf"]
+    assert pair[1].lexical_backend == "bm25"
+
+
+def test_configs_rejects_a_bad_selection():
+    import pytest
+
+    from evals.spider_external import configs_from_names
+
+    with pytest.raises(ValueError):
+        configs_from_names("legacy_minmax")
+    with pytest.raises(ValueError):
+        configs_from_names("legacy_minmax,not_a_preset")

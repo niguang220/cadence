@@ -117,6 +117,10 @@ The value-sensitive comparison is documented in the
 The latest consolidated interpretation, including the general-mix run and open problems, is
 in [Project status](docs/STATUS.md).
 
+The cutover to the typed RRF default — the deterministic backend/weight matrix and the frozen
+full-agent gate run — is recorded in the
+[governed RRF cutover report](docs/reliability/2026-08-18-governed-rrf-cutover.md).
+
 The public-benchmark screen was frozen before execution and is documented in the
 [Spider preregistration](docs/reliability/2026-08-15-spider-external-preregistration.md) and
 [reviewed result](docs/reliability/2026-08-15-spider-external-result.md). It uses Cadence's custom

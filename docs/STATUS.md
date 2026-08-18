@@ -132,6 +132,8 @@ a historical comparator, and `current_hybrid` remains as a deprecated alias. Ela
 retrieval stays opt-in. No LLM selector, reranker, or new vector backend was added.
 
 The measured sections above predate this cutover and keep their original configuration names.
+The selection matrix and the frozen full-agent gate run that supported it are recorded in the
+[governed RRF cutover report](reliability/2026-08-18-governed-rrf-cutover.md).
 
 ## Next work, in order
 
