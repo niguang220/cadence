@@ -32,10 +32,22 @@ from agent.usage import estimate_cost_usd  # noqa: E402
 
 EXAMPLES = [
     "How many accounts are in the us-east region?",  # normal in-domain answer
-    "List our users' email addresses",               # in-domain -> PII governance refusal
+    # PII columns are withheld from the schema the model sees, so the agent cannot write a query
+    # for this at all and declines. It does NOT demonstrate the SQL/result governance gate firing
+    # -- that gate is the second layer, reached only if a query names a denied column anyway.
+    "List our users' email addresses",
     "Plot a histogram of subscription monthly amounts",  # only Python can bin+plot -> sandbox chart
-    "What's the weather in Singapore today?",         # out of domain -> reasoned refusal
+    # out of domain: intent routing passes it through, and feasibility refuses it once schema
+    # retrieval comes back empty
+    "What's the weather in Singapore today?",
 ]
+
+_PII_NOTE = (
+    "**Privacy:** PII columns are withheld from the schema the model is shown, so a question "
+    "like the e-mail one above cannot be turned into SQL in the first place — the agent "
+    "declines. Column-level SQL and result governance sit behind that as defence in depth, for "
+    "a query that names a denied column anyway."
+)
 
 # Governance hook for the opener: ungoverned SUM(mrr) = 2925 (counts trials/cancelled/test)
 # vs the governed definition = 1288. A >2x gap a non-analyst can see (verified 2026-08-05).
@@ -190,38 +202,83 @@ def _ran_ok(res) -> bool:
                         for t in getattr(res, "trace", []) or []))
 
 
+# The public demo runs one question at a time: it calls run_agent, which is non-HITL, so there
+# is no session to resume and no way to answer a clarification in-page. Saying so is part of
+# being truthful about the surface rather than implying a follow-up turn exists.
+_CLARIFICATION_HELP = (
+    "The agent asked instead of guessing. This public demo runs a single non-interactive "
+    "turn, so it cannot resume the session to take your reply — edit the question to name "
+    "the metric you mean and resubmit."
+)
+
+
+def _result_state(res: AnswerResult) -> str:
+    """Which of the four public outcomes this run produced.
+
+    Order matters. A governance block carries SQL, so it is checked first. A clarification has
+    no SQL but is NOT a refusal -- asking is a better outcome than declining, and the demo used
+    to collapse the two. Only a run with no SQL and no question left is a generic refusal.
+    """
+    if _governance_block(res):
+        return "governance_block"
+    if getattr(res, "clarification", None):
+        return "clarification"
+    if not getattr(res, "sql", ""):
+        return "refusal"
+    if not getattr(getattr(res, "execution", None), "ok", False):
+        return "refusal"                     # SQL was written but the query never succeeded
+    if any(isinstance(s, dict) and s.get("refused") for s in (res.trace or [])):
+        return "refusal"                     # executed, then refused downstream (e.g. the judge)
+    return "success"
+
+
 def _render(res: AnswerResult) -> None:
     _render_answer(res)
     _render_usage(res.usage or {})   # always -- usage shows even on a refusal / gov block
 
 
+def _render_trace(res: AnswerResult) -> None:
+    """The per-node pipeline trace. Rendered for EVERY outcome: a refusal or a governance block
+    is exactly when a reader most wants to see which gate stopped the run."""
+    trace = [s for s in (res.trace or []) if isinstance(s, dict)]
+    if not trace:
+        return
+    n_llm = sum(1 for s in trace if s.get("node") in _LLM_NODES)
+    with st.expander(f"Pipeline trace -- {len(trace)} steps, {n_llm} of them LLM calls"):
+        for step in trace:
+            st.markdown(_trace_line(step))
+
+
 def _render_answer(res: AnswerResult) -> None:
-    gov = _governance_block(res)
-    if gov:
-        # the agent wrote a valid query; a deterministic column-level gate refused it
-        st.error(f"🔒 Blocked by data governance (PII) — {gov}")
-        st.caption("The agent wrote a valid query, but a deterministic column-level "
-                   "governance gate refused it before execution — no PII left the database.")
+    state = _result_state(res)
+    if state == "governance_block":
+        # the agent wrote a valid query naming a denied column; a deterministic column-level
+        # gate refused it before execution
+        st.error(f"🔒 Blocked by data governance (PII) — {_governance_block(res)}")
+        st.caption("A deterministic column-level governance gate refused this query before "
+                   "execution — no PII left the database. This is defence in depth: PII "
+                   "columns are already withheld from the schema the model sees.")
         if res.sql:
             st.code(res.sql, language="sql")
-        return
-    if not res.sql:
-        # a reasoned refusal -- the agent says why instead of inventing an answer
-        st.warning(f"Refused: {res.answer or res.clarification or 'no answer'}")
-        return
-    st.markdown(f"**Answer:** {res.answer}")
-    st.code(res.sql, language="sql")
-    if res.execution and res.execution.ok and res.execution.rows:
-        st.dataframe([dict(zip(res.execution.columns, row)) for row in res.execution.rows])
-    png = _chart_png(res)
-    if png:
-        st.image(png, caption="Rendered by model-generated Python in the Docker sandbox — "
-                              "no network, read-only rootfs, all Linux capabilities dropped.")
-    n_llm = sum(1 for s in res.trace if isinstance(s, dict) and s.get("node") in _LLM_NODES)
-    with st.expander(f"Pipeline trace -- {len(res.trace)} steps, {n_llm} of them LLM calls"):
-        for step in res.trace:
-            if isinstance(step, dict):
-                st.markdown(_trace_line(step))
+    elif state == "clarification":
+        st.info(f"❓ Needs clarification — {res.clarification}")
+        st.caption(_CLARIFICATION_HELP)
+    elif state == "refusal":
+        # a reasoned refusal -- the agent says why instead of inventing an answer. The SQL is
+        # shown when one was written, so a downstream refusal is not mistaken for "no query".
+        st.warning(f"Refused: {res.answer or 'no answer'}")
+        if res.sql:
+            st.code(res.sql, language="sql")
+    else:
+        st.markdown(f"**Answer:** {res.answer}")
+        st.code(res.sql, language="sql")
+        if res.execution and res.execution.ok and res.execution.rows:
+            st.dataframe([dict(zip(res.execution.columns, row)) for row in res.execution.rows])
+        png = _chart_png(res)
+        if png:
+            st.image(png, caption="Rendered by model-generated Python in the Docker sandbox — "
+                                  "no network, read-only rootfs, all Linux capabilities dropped.")
+    _render_trace(res)
 
 
 def _render_usage(usage: dict) -> None:
@@ -280,6 +337,8 @@ def _ask_tab() -> None:
     if "question" not in st.session_state:
         st.session_state.question = EXAMPLES[0]
     st.write("Ask anything about the SaaS metrics — or try an example:")
+    st.caption("One non-interactive turn per question: if the agent asks for clarification the "
+               "demo cannot take a reply, so edit the question and resubmit.")
     for col, ex in zip(st.columns(len(EXAMPLES)), EXAMPLES):
         col.button(ex, on_click=_pick, args=(ex,), use_container_width=True)
     st.text_input("Question", key="question", label_visibility="collapsed",
@@ -291,6 +350,7 @@ def _ask_tab() -> None:
             _render(res)
         except Exception as exc:
             st.error(f"Could not run the agent: {exc}. Set DEEPSEEK_API_KEY (e.g. a local .env).")
+    st.caption(_PII_NOTE)
 
 
 def _reliability_tab() -> None:

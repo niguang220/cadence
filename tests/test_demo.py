@@ -150,3 +150,114 @@ def test_ran_ok_distinguishes_a_real_answer_from_a_refusal():
         "ok": False, "rows": [], "error": "governance violation: query references blocked "
         "PII columns: user.email"})(), "trace": []})()
     assert app._ran_ok(pii) is False
+
+
+# --- result state classification: four distinct outcomes ------------------------------------
+
+def _res(sql="SELECT 1", err="", ok=True, rows=((1,),), clarification=None, answer="a",
+         trace=()):
+    return type("R", (), {
+        "sql": sql, "answer": answer, "clarification": clarification,
+        "execution": type("E", (), {"ok": ok, "rows": list(rows), "columns": ["c"],
+                                    "error": err, "truncated": False})(),
+        "trace": list(trace), "usage": {}, "python_analysis": None})()
+
+
+def test_result_state_distinguishes_four_outcomes():
+    import demo.app as app
+
+    assert app._result_state(_res()) == "success"
+    assert app._result_state(_res(sql="", ok=False, rows=(), answer="q?",
+                                  clarification="q?")) == "clarification"
+    assert app._result_state(_res(sql="", ok=False, rows=(), answer="no")) == "refusal"
+    pii = _res(sql="SELECT email FROM user", ok=False, rows=(),
+               err="governance violation: query references blocked PII columns: user.email")
+    assert app._result_state(pii) == "governance_block"
+
+
+def test_a_clarification_is_not_classified_as_a_refusal():
+    """The public demo used to render an ambiguity question as "Refused", which misreports a
+    better outcome as a worse one. Clarification is checked before the generic refusal."""
+    import demo.app as app
+
+    res = _res(sql="", ok=False, rows=(), clarification='"best" can be measured several ways.',
+               answer='"best" can be measured several ways.')
+    assert app._result_state(res) == "clarification"
+    assert app._result_state(res) != "refusal"
+
+
+def test_a_parse_failure_is_a_generic_refusal_not_a_governance_block():
+    import demo.app as app
+
+    res = _res(sql="some prose", ok=False, rows=(),
+               err="governance violation: could not parse SQL for governance: Invalid expression")
+    assert app._result_state(res) == "refusal"
+
+
+def test_clarification_copy_states_the_demo_cannot_resume(monkeypatch):
+    """The demo has no session resume, so the clarification callout must tell the user to edit
+    and resubmit rather than implying a reply is possible."""
+    import demo.app as app
+
+    copy = app._CLARIFICATION_HELP.lower()
+    assert "resume" in copy or "follow-up" in copy
+    assert "edit" in copy or "rephrase" in copy or "resubmit" in copy
+
+
+def test_every_outcome_renders_the_pipeline_trace(monkeypatch):
+    """The trace used to be reachable only on the success path, because governance blocks and
+    refusals returned early. All four outcomes must expose it."""
+    import demo.app as app
+
+    seen = []
+    monkeypatch.setattr(app, "_render_trace", lambda res: seen.append(app._result_state(res)))
+    for stub in (
+        _res(trace=[{"node": "respond"}]),
+        _res(sql="", ok=False, rows=(), clarification="q?", answer="q?"),
+        _res(sql="", ok=False, rows=(), answer="no"),
+        _res(sql="SELECT email FROM user", ok=False, rows=(),
+             err="governance violation: query references blocked PII columns: user.email"),
+    ):
+        app._render_answer(stub)
+    assert seen == ["success", "clarification", "refusal", "governance_block"]
+
+
+def test_sql_that_executed_then_was_refused_downstream_is_a_refusal():
+    """The semantic-consistency judge can refuse after a successful execution. The run produced
+    no answer, so it must not render under an "Answer:" heading."""
+    import demo.app as app
+
+    res = _res(trace=[{"node": "respond", "refused": True}])
+    assert app._result_state(res) == "refusal"
+
+
+def test_sql_that_failed_to_execute_is_a_refusal():
+    import demo.app as app
+
+    assert app._result_state(_res(ok=False, rows=(), err="no such column: x")) == "refusal"
+
+
+def test_a_successful_empty_result_is_still_a_success():
+    """Zero rows is a legitimate answer ("No matching results."), not a refusal."""
+    import demo.app as app
+
+    assert app._result_state(_res(ok=True, rows=())) == "success"
+
+
+def test_pii_note_describes_redaction_first_and_governance_as_defence_in_depth():
+    """The demo must not claim the e-mail example shows the PII gate blocking generated SQL.
+    Redaction is the first layer; the SQL/result gate is the second."""
+    import demo.app as app
+
+    note = app._PII_NOTE.lower()
+    assert "withheld" in note or "redact" in note
+    assert "defence in depth" in note or "defense in depth" in note
+    assert "declines" in note or "cannot" in note
+
+
+def test_the_governance_callout_still_names_redaction_as_the_first_layer():
+    import demo.app as app
+    import inspect
+
+    source = inspect.getsource(app._render_answer)
+    assert "defence in depth" in source
