@@ -31,7 +31,7 @@ On 2026-08-19, after removing the retired retrieval implementation and its compa
 the service-free suite completed with:
 
 ```text
-732 passed, 8 skipped
+733 passed, 8 skipped
 ```
 
 The skipped tests are the opt-in real-Elasticsearch tier. The deterministic scorecard also ran

@@ -120,21 +120,19 @@ exist as tested library APIs with in-memory state.
 
 ## Current evidence
 
-The numbers below answer different questions and should not be combined into one accuracy score.
-Some rows are historical experiments from before the current architecture. Their reviewed reports
-preserve the exact configuration names and conclusions used at measurement time; those old
-configurations are not part of the executable product surface today.
+Each row answers one product question. The denominators come from different frozen fixtures, so
+they should not be combined into one accuracy score.
 
-| Evaluation | Result | Interpretation |
+| Product question | Measured evidence | What it supports — and what it does not |
 | --- | --- | --- |
-| Deterministic gate fixture | 14/14 routes match the specification | A CI contract check (`by_construction`), not population accuracy |
-| Value-sensitive E2E, 280 runs | RRF + value retrieval 32/50 vs the pre-RRF baseline 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
-| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift was mixed with case-level regressions; the candidate was rejected |
-| Spider screen, 180 runs | Typed RRF 56/90 vs the pre-RRF baseline 55/90, but lower context recall and 3 extra `no_sql` outcomes | The preregistered gate rejected that candidate |
-| Shipping gate, 180 runs | `governed_rrf` 58/90; candidate recall 100.0%; context recall 98.3% | The absolute release gate passed; this is the run behind the current default |
+| Does metric governance reduce business-definition errors? | On the same 24 metric cases, semantic governance ON reached 101/120 execution matches versus 10/120 with it OFF; controls were 25/30 in either mode | Strong evidence for the governed metric layer on this SaaS fixture; not general NL-to-SQL accuracy |
+| Does entity-value retrieval help when table and column names are insufficient? | On 10 value-sensitive cases, otherwise-matched RRF paths scored 32/50 with value evidence versus 9/50 without it; 0 PII leaks across 80 control runs | Supports the opt-in Elasticsearch channel for high-cardinality entity questions; the fixture was deliberately value-sensitive |
+| Does the shipping retriever transfer beyond the repository schema? | On a frozen 30-case Spider slice, the shipping path reached 58/90 execution matches, 100% candidate recall, and 98.3% context recall | An external screening result with a custom oracle, not an official Spider leaderboard score |
+| Are deterministic boundaries regression-tested? | 14/14 gate routes matched their specification; the service-free suite currently has 732 passing tests and 8 opt-in skips | Verifies coded contracts and regressions, not real-world model accuracy |
 
-The latest consolidated interpretation, including historical experiments and current boundaries,
-is in [Project status](docs/STATUS.md).
+The migration experiments and negative results that led to this product shape remain in
+[Project status](docs/STATUS.md) and the reviewed reliability reports. They are engineering
+history, not additional runtime modes.
 
 The cutover to the typed RRF default — the deterministic backend/weight matrix and the frozen
 full-agent gate run — is recorded in the

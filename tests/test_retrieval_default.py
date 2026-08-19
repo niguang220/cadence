@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -78,6 +79,14 @@ def test_cli_exposes_only_product_configs():
     import agent.cli as cli
 
     assert set(cli._CONFIG_FACTORIES) == {"governed_rrf", "governed_rrf_value"}
+
+
+def test_readme_exposes_only_product_retrieval_presets():
+    text = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "`governed_rrf`" in text and "`governed_rrf_value`" in text
+    for internal in ("current_hybrid", "legacy_minmax", "rrf_hybrid",
+                     "value_ablation", "dense_value"):
+        assert internal not in text, f"evaluation or retired preset leaked into README: {internal}"
 
 
 def test_config_is_frozen_so_the_shared_default_cannot_be_mutated():
