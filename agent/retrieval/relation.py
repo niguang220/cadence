@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from agent.db.introspect import Table, expand_with_fk_neighbors
+from agent.db.introspect import Table
 from agent.retrieval.contracts import RelationEdge, RelationPlan
 
 
@@ -108,22 +108,3 @@ def plan_relations(tables: list[Table], anchors: list[str], *, max_hops: int = 3
         strategy="shortest_path", anchors=anchors, bridges=sorted(bridges),
         context_tables=context, edges=_edges_along(by_name, accepted_paths),
         unconnected_anchors=unconnected, ambiguous_paths=sorted(ambiguous))
-
-
-def legacy_one_hop_plan(tables: list[Table], anchors: list[str]) -> RelationPlan:
-    by_name = {t.name: t for t in tables}
-    anchors = sorted(set(anchors))
-    context = sorted(expand_with_fk_neighbors(tables, anchors))
-    # edges: physical FKs among the context tables (deterministic), for trace/parity
-    seen, edges = set(), []
-    for x in context:
-        for y in context:
-            if x < y:
-                for e in _physical_edges_between(by_name, x, y):
-                    key = (e.from_table, e.from_column, e.to_table, e.to_column)
-                    if key not in seen:
-                        seen.add(key); edges.append(e)
-    edges.sort(key=lambda e: (e.from_table, e.from_column, e.to_table, e.to_column))
-    return RelationPlan(strategy="legacy_one_hop", anchors=anchors, bridges=[],
-                        context_tables=context, edges=edges,
-                        unconnected_anchors=[], ambiguous_paths=[])

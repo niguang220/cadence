@@ -29,12 +29,11 @@ from evalharness.spider import (
 
 _REPORT_DIR = Path(__file__).resolve().parent.parent / "docs" / "reliability"
 _MAX_CONCURRENCY = 16
-# Default pair reproduces the published preregistered screen. --configs selects a different
-# pair (e.g. the shipping default against the retained comparator) without editing the driver.
-_CONFIGS = (RetrievalConfig.legacy_minmax(), RetrievalConfig.rrf_hybrid())
+# Default pair compares the shipping pipeline with a simple maintained baseline. Historical
+# comparisons remain in their published reports rather than in the current executable surface.
+_CONFIGS = (RetrievalConfig.lexical_baseline(), RetrievalConfig.default())
 _CONFIG_FACTORIES = {
     "governed_rrf": RetrievalConfig.default,
-    "legacy_minmax": RetrievalConfig.legacy_minmax,
     "rrf_hybrid": RetrievalConfig.rrf_hybrid,
     "lexical_baseline": RetrievalConfig.lexical_baseline,
 }
@@ -60,7 +59,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--configs", help="two comma-separated presets, baseline first "
-                                         "(default: legacy_minmax,rrf_hybrid)")
+                                         "(default: lexical_baseline,governed_rrf)")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--output", type=Path, help="override the ignored raw JSON output path")
     return parser.parse_args(argv)

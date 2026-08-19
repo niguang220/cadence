@@ -44,7 +44,7 @@ def test_controls_diverging_ids_flag_asymmetry():
 
 
 def test_repeats_disagree_but_paired_on_off_agree_is_not_divergent():
-    cfg = {"name": "legacy_minmax"}
+    cfg = {"name": "baseline"}
 
     def rec(sl, match, rep):
         return _mk_control(id="c1", semantic_layer=sl, exec_match=match, retrieval_config=cfg,

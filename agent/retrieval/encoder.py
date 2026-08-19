@@ -1,8 +1,7 @@
-"""Embedding encoder seam: decouples callers from the private ``_embed`` symbol.
+"""Embedding encoder seam shared by retrieval backends and the metric registry.
 
 BGE-via-fastembed is the encoder; later storage/search backends (in-memory numpy, Qdrant)
-and the MetricRegistry all depend on THIS interface, not on ``_embed`` directly. Default
-behavior is byte-identical to today (delegates to ``_embed``); injecting ``embed_fn`` lets
+and the MetricRegistry all depend on THIS interface. Injecting ``embed_fn`` lets
 tests avoid loading the model. No caching/backends here — that is a later task.
 """
 from __future__ import annotations
@@ -24,8 +23,8 @@ class EmbeddingEncoder:
     def embed(self, texts: list[str]) -> np.ndarray:
         if self._embed_fn is not None:
             return self._embed_fn(texts)
-        from agent.hybrid_retriever import _embed
-        return _embed(texts)
+        from agent.retrieval.embedding import embed
+        return embed(texts)
 
 
 _DEFAULT = EmbeddingEncoder()

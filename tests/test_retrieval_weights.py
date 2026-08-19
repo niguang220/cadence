@@ -88,12 +88,3 @@ def test_weights_cannot_disable_the_offtopic_refusal(tables):
         result = run_retrieval("what is the weather in singapore today", tables, cfg, k=5)
         assert result.candidates == []
         assert any(e.event == "admission_rejected" for e in result.stage_events)
-
-
-def test_weights_do_not_apply_to_the_legacy_comparator(tables):
-    """legacy_minmax does not fuse by RRF at all; a weight must not silently change it."""
-    base = run_retrieval("how many invoices", tables, RetrievalConfig.legacy_minmax(), k=5)
-    weighted = run_retrieval("how many invoices", tables,
-                             RetrievalConfig.legacy_minmax().with_weights(lexical=0.25, dense=1.0),
-                             k=5)
-    assert [c.table for c in base.candidates] == [c.table for c in weighted.candidates]

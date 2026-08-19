@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent.db.introspect import Table
-from agent.hybrid_retriever import _schema_fingerprint
+from agent.retrieval.embedding import schema_fingerprint
 from agent.retrieval.value_backend import ValueBackend, ValueDoc
 from agent.retrieval.value_policy import resolve_searchable_columns
 
@@ -21,7 +21,7 @@ def index_name(tables: list[Table]) -> str:
     """Schema-fingerprinted index name. The fingerprint is HASHED to a lowercase hex digest so the
     name is a valid Elasticsearch index name (the raw fingerprint tuple contains spaces/commas/
     parens, which ES rejects — a bug the no-op FakeValueBackend could not surface)."""
-    fp = hashlib.sha1(repr(_schema_fingerprint(tables)).encode("utf-8")).hexdigest()[:16]
+    fp = hashlib.sha1(repr(schema_fingerprint(tables)).encode("utf-8")).hexdigest()[:16]
     return f"cadence-values-{fp}"
 
 

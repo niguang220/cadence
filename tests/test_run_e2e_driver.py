@@ -52,7 +52,7 @@ def test_build_report_stamps_provenance(tmp_path):
     tables = introspect(db)
     gold = "SELECT COUNT(*) FROM subscription"
     cases = [_one_control_case()]
-    config = RetrievalConfig.legacy_minmax()
+    config = RetrievalConfig.default()
     report = build_report(db, tables, cases, PlanningFakeModel(gold), model_name="fake",
                           config=config, k=5, repeats=1)
     assert report["measured"] is True

@@ -23,38 +23,37 @@ def _setup(tmp_path):
 
 def test_config_matrix_is_the_four_stage3b_configs():
     assert [f().name for f in _CONFIGS.values()] == [
-        "legacy_minmax", "rrf_hybrid", "value_ablation", "dense_value"]
+        "governed_rrf", "rrf_hybrid", "value_ablation", "dense_value"]
 
 
 def test_config_provenance_is_canonical_and_named():
     prov = config_provenance()
-    assert [c["name"] for c in prov] == ["legacy_minmax", "rrf_hybrid", "value_ablation", "dense_value"]
-    # legacy_minmax is the byte-identical legacy control; dense_value is RRF + shortest_path + value
-    ch = next(c for c in prov if c["name"] == "legacy_minmax")
+    assert [c["name"] for c in prov] == ["governed_rrf", "rrf_hybrid", "value_ablation", "dense_value"]
+    base = next(c for c in prov if c["name"] == "governed_rrf")
     dv = next(c for c in prov if c["name"] == "dense_value")
-    assert ch["fusion"] == "legacy_minmax" and ch["relation_strategy"] == "legacy_one_hop"
+    assert base["fusion"] == "rrf" and base["relation_strategy"] == "shortest_path"
     assert dv["fusion"] == "rrf" and dv["value_backend"] == "es"
 
 
 def test_summarize_pairs_dense_value_against_the_other_three():
     records = [
-        # dense_value beats legacy_minmax on case A (2/2 vs 0/2), ties on B (1/2 vs 1/2)
+        # dense_value beats governed_rrf on case A (2/2 vs 0/2), ties on B (1/2 vs 1/2)
         {"kind": "primary", "config": "dense_value", "case": "A", "exec_match": True},
         {"kind": "primary", "config": "dense_value", "case": "A", "exec_match": True},
-        {"kind": "primary", "config": "legacy_minmax", "case": "A", "exec_match": False},
-        {"kind": "primary", "config": "legacy_minmax", "case": "A", "exec_match": False},
+        {"kind": "primary", "config": "governed_rrf", "case": "A", "exec_match": False},
+        {"kind": "primary", "config": "governed_rrf", "case": "A", "exec_match": False},
         {"kind": "primary", "config": "dense_value", "case": "B", "exec_match": True},
         {"kind": "primary", "config": "dense_value", "case": "B", "exec_match": False},
-        {"kind": "primary", "config": "legacy_minmax", "case": "B", "exec_match": True},
-        {"kind": "primary", "config": "legacy_minmax", "case": "B", "exec_match": False},
+        {"kind": "primary", "config": "governed_rrf", "case": "B", "exec_match": True},
+        {"kind": "primary", "config": "governed_rrf", "case": "B", "exec_match": False},
     ]
     s = summarize({"records": records})
-    p = s["dense_value_vs_legacy_minmax"]
-    assert p == {"a": "dense_value", "b": "legacy_minmax", "metric": "exec_match",
+    p = s["dense_value_vs_governed_rrf"]
+    assert p == {"a": "dense_value", "b": "governed_rrf", "metric": "exec_match",
                  "wins": 1, "losses": 0, "ties": 1,
-                 "per_case": {"A": {"dense_value": "2/2", "legacy_minmax": "0/2"},
-                              "B": {"dense_value": "1/2", "legacy_minmax": "1/2"}}}
-    assert set(s) == {"dense_value_vs_legacy_minmax", "dense_value_vs_rrf_hybrid",
+                 "per_case": {"A": {"dense_value": "2/2", "governed_rrf": "0/2"},
+                              "B": {"dense_value": "1/2", "governed_rrf": "1/2"}}}
+    assert set(s) == {"dense_value_vs_governed_rrf", "dense_value_vs_rrf_hybrid",
                       "dense_value_vs_value_ablation"}
 
 
@@ -96,9 +95,9 @@ def test_build_report_uses_frozen_selection_and_sha(tmp_path):
     assert len(rep["frozen_case_sha256"]) == 64
     assert len(rep["frozen_config_sha256"]) == 64                     # configs frozen too
     assert [c["name"] for c in rep["config_provenance"]] == [
-        "legacy_minmax", "rrf_hybrid", "value_ablation", "dense_value"]
-    assert rep["configs"] == ["legacy_minmax", "rrf_hybrid", "value_ablation", "dense_value"]
-    assert set(rep["summary"]) == {"dense_value_vs_legacy_minmax", "dense_value_vs_rrf_hybrid",
+        "governed_rrf", "rrf_hybrid", "value_ablation", "dense_value"]
+    assert rep["configs"] == ["governed_rrf", "rrf_hybrid", "value_ablation", "dense_value"]
+    assert set(rep["summary"]) == {"dense_value_vs_governed_rrf", "dense_value_vs_rrf_hybrid",
                                    "dense_value_vs_value_ablation"}
     assert rep["selected_primaries"] == list(_SELECTED_PRIMARY_IDS)
 
@@ -122,38 +121,6 @@ def test_build_report_rejects_unknown_case_id(tmp_path):
         build_report(db, tables, load_value_linking(), PlanningFakeModel("SELECT 1"),
                      FakeValueBackend(), model_name="fake", repeats=1, concurrency=1,
                      primary_ids=("does_not_exist",), control_ids=())
-
-
-def test_legacy_minmax_legacy_path_has_defined_ordered_candidates_and_fusion_at_5(tmp_path,
-                                                                                    monkeypatch):
-    """The legacy_minmax config (legacy_minmax) still yields an ordered candidate list and a defined
-    Fusion@5 — the metric ranks on the config's OWN fusion_rank (min-max hybrid position), so it is
-    comparable to the RRF configs. Deterministic (dense zeroed)."""
-    import agent.hybrid_retriever as hr
-    from agent.retrieval.contracts import RetrievalConfig
-    from agent.retrieval.pipeline import run_retrieval
-    from evalharness.value_metrics import rank_sensitive_metrics
-
-    class _ZeroIndex:
-        def __init__(self, tables):
-            pass
-
-        def table_scores(self, q):
-            return {}
-
-    monkeypatch.setattr(hr, "SemanticIndex", _ZeroIndex)
-    hr._INDEX_CACHE.clear()
-    _, tables = _setup(tmp_path)
-    rr = run_retrieval("list every ticket and its company", tables,
-                       RetrievalConfig.legacy_minmax(), k=5)
-    m = rank_sensitive_metrics(rr, ["ticket"])
-    ordered = m["candidate_tables_ordered"]
-    assert ordered and "ticket" in ordered                     # legacy hybrid produces & recalls
-    ranks = [c.fusion_rank for c in rr.candidates]
-    assert sorted(ranks) == list(range(1, len(ranks) + 1))     # fusion_rank = 1-based hybrid position
-    assert m["candidate_recall"] is not None                   # defined, not crashing on the legacy path
-    assert m["fusion_at_5_recall"] == (1.0 if "ticket" in ordered[:5] else 0.0)
-    hr._INDEX_CACHE.clear()
 
 
 def test_control_deterministic_safety_helper(tmp_path):

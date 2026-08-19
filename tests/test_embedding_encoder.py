@@ -6,19 +6,19 @@ import pytest
 
 def _fastembed_available():
     try:
-        from agent.hybrid_retriever import _model
-        _model()
+        from agent.retrieval.embedding import model
+        model()
         return True
     except Exception:
         return False
 
 
 @pytest.mark.skipif(not _fastembed_available(), reason="fastembed model not available offline")
-def test_encoder_matches_private_embed():
-    from agent.hybrid_retriever import _embed
+def test_encoder_matches_shared_embed():
+    from agent.retrieval.embedding import embed
     from agent.retrieval.encoder import EmbeddingEncoder
     texts = ["monthly recurring revenue", "account name"]
-    np.testing.assert_array_equal(EmbeddingEncoder().embed(texts), _embed(texts))
+    np.testing.assert_array_equal(EmbeddingEncoder().embed(texts), embed(texts))
 
 
 def test_encoder_is_injectable_stub():
@@ -27,19 +27,17 @@ def test_encoder_is_injectable_stub():
     assert enc.embed(["a", "b"]).shape == (2, 3)
 
 
-def test_default_encoder_delegates_to_private_embed(monkeypatch):
-    # Offline proof of byte-identity: the default encoder is a pure passthrough to _embed.
-    import agent.hybrid_retriever as hr
+def test_default_encoder_delegates_to_shared_embed(monkeypatch):
+    import agent.retrieval.embedding as embedding
     from agent.retrieval.encoder import EmbeddingEncoder
     sentinel = np.array([[1.0, 2.0]], dtype="float32")
-    monkeypatch.setattr(hr, "_embed", lambda texts: sentinel)
+    monkeypatch.setattr(embedding, "embed", lambda texts: sentinel)
     assert EmbeddingEncoder().embed(["x"]) is sentinel
 
 
 def test_semantic_layer_default_embed_routes_through_encoder(monkeypatch):
-    # _default_embed must go through the encoder seam, still reaching _embed unchanged.
-    import agent.hybrid_retriever as hr
+    import agent.retrieval.embedding as embedding
     from agent.semantic_layer import _default_embed
     marker = np.array([[9.0]], dtype="float32")
-    monkeypatch.setattr(hr, "_embed", lambda texts: marker)
+    monkeypatch.setattr(embedding, "embed", lambda texts: marker)
     assert _default_embed(["q"]) is marker

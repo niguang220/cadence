@@ -8,8 +8,8 @@ from typing import Protocol
 import numpy as np
 
 from agent.db.introspect import Table
-from agent.hybrid_retriever import _column_doc, _schema_fingerprint
 from agent.retrieval.encoder import EmbeddingEncoder, default_encoder
+from agent.retrieval.embedding import column_document, schema_fingerprint
 
 
 class DenseBackend(Protocol):
@@ -27,7 +27,7 @@ class _ColumnIndex:
         docs: list[str] = []
         for t in tables:
             for c in t.columns:
-                docs.append(_column_doc(t, c))
+                docs.append(column_document(t, c))
                 self._docs_meta.append((t.name, c.name))
         self._embs = encoder.embed(docs) if docs else np.zeros((0, 384), np.float32)
 
@@ -49,7 +49,7 @@ class InMemoryDenseBackend:
 
     def column_scores(self, question: str, tables: list[Table]) -> list[tuple[str, str, float]]:
         try:
-            key = (_schema_fingerprint(tables), self._encoder.id)
+            key = (schema_fingerprint(tables), self._encoder.id)
             index = _INDEX_CACHE.get(key)
             if index is None:
                 index = _INDEX_CACHE[key] = _ColumnIndex(tables, self._encoder)

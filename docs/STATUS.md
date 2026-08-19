@@ -1,7 +1,9 @@
 # Cadence project status
 
-**Last reviewed:** 2026-08-18  
-**Current release stage:** engineering testbed / pre-release 0.1  
+**Last reviewed:** 2026-08-19
+
+**Current release stage:** engineering testbed / v0.1.0
+
 **Shipping retrieval preset:** `governed_rrf` (BM25 lexical + in-memory dense, Weighted RRF, shortest-path relations; semantic governance on by default)
 
 This page is the canonical summary of what is complete, what the measurements support, and
@@ -17,7 +19,7 @@ what remains before Cadence can be presented as more than a repository-owned pro
 | Clarification and plan approval | Implemented | In-memory checkpoint and runtime registries |
 | Python analysis sandbox | Implemented | Local Docker one-shot execution |
 | Governed metric registry | Implemented | Metrics only; entity and relationship contracts remain partial |
-| Typed retrieval pipeline | Implemented and shipping as the default | `legacy_minmax` retained one cycle as a historical comparator |
+| Typed retrieval pipeline | Implemented and shipping as the only product retrieval path | Evaluation-only presets remain outside the public CLI |
 | Elasticsearch value channel | Implemented, integration-tested, and exposed in the CLI | Requires an external ES service and explicit `index-values` ingestion |
 | Reliability harness | Implemented | Most fixtures are small and repository-owned |
 | Public benchmark | 30-case Spider screen completed | Custom execution oracle; screening slice, not a leaderboard result |
@@ -25,10 +27,11 @@ what remains before Cadence can be presented as more than a repository-owned pro
 
 ## Verified local state
 
-On 2026-08-15, the service-free suite completed with:
+On 2026-08-19, after removing the retired retrieval implementation and its comparator-only tests,
+the service-free suite completed with:
 
 ```text
-672 passed, 8 skipped
+733 passed, 8 skipped
 ```
 
 The skipped tests are the opt-in real-Elasticsearch tier. The deterministic scorecard also ran
@@ -46,8 +49,8 @@ the opt-in integration workflow.
 ## What the measured runs say
 
 These runs predate the governed-RRF cutover. They keep their original configuration names,
-numbers, and the conclusions reached at the time. Throughout this section `current_hybrid`
-is the **then-default**, now preserved as `legacy_minmax` and no longer the shipping preset.
+numbers, and the conclusions reached at the time. Names in this section are immutable provenance
+labels in reviewed reports, not executable product presets.
 
 ### 1. Value-sensitive E2E: targeted gate passed
 
@@ -134,8 +137,8 @@ Semantic governance is on by default on the Python API, the CLI, and the demo, w
 opt-out. Where the metric registry does not govern a database at all, governance is inert and
 traced rather than fatal.
 
-`legacy_minmax` preserves the previous min-max + one-hop implementation for one release cycle as
-a historical comparator, and `current_hybrid` remains as a deprecated alias. Elasticsearch value
+The pre-RRF implementation and its compatibility alias have been removed from the executable code.
+Their measurements remain available in reviewed reports and Git history. Elasticsearch value
 retrieval stays opt-in. No LLM selector, reranker, or new vector backend was added.
 
 The measured sections above predate this cutover and keep their original configuration names.
@@ -144,17 +147,16 @@ The selection matrix and the frozen full-agent gate run that supported it are re
 
 ## Next work, in order
 
-1. **Localize the failed Spider gate.** Trace the extra full-context `no_sql` outcomes and retain
-   the five paired divergent cases as a fixed diagnostic set.
-2. **Repair selection without widening context blindly.** Test a bounded fix for the one Spider
-   case where RRF candidates contained both gold tables but selection/context dropped one.
-3. **Address generation failures.** Most external misses were executable answer mismatches despite
+1. **Keep the v0.1 product story coherent.** Demo, CLI, README, and tests must exercise the same
+   governed-RRF path; historical configurations stay in reports rather than runtime code.
+2. **Address generation failures.** Most external misses were executable answer mismatches despite
    high table recall; retrieval work alone will not fix them.
-4. **Confirm before any cutover.** Only a clean diagnostic result should lead to a separately
-   preregistered, larger public-benchmark comparison.
-5. **Harden the project boundary.** Split the graph module, add durable HITL storage, dependency
-   locking, lint/type/coverage checks, and a supported deployment shape only if the project moves
-   beyond a local testbed.
+3. **Broaden external evidence deliberately.** Expand the public benchmark only behind a frozen
+   question, denominator, and stop condition; do not tune retrieval on the current 30-case slice.
+4. **Treat clarification as experimental.** Keep the bounded heuristic and library HITL API, but do
+   not present them as a complete conversational product until they have a real interaction surface.
+5. **Harden the project boundary only when justified.** Durable HITL, provider abstraction,
+   dependency locking, lint/type/coverage gates, and deployment work are separate product decisions.
 
 Qdrant, an LLM selector, multi-tenancy, and a full semantic model are deliberately not immediate
 priorities.

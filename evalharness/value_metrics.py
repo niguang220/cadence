@@ -22,9 +22,7 @@ def rank_sensitive_metrics(retrieval_result, gold_tables) -> dict:
         "candidate_count": len(ordered),
         "candidate_recall": recall(cand),
         # fusion_at_5_recall = gold within the config's OWN top-5 candidate ordering (fusion_rank).
-        # For RRF configs that rank is the RRF fused rank; for the legacy_minmax preset it is the
-        # min-max hybrid position (legacy_candidates sets fusion_rank = rank). Same "candidate-order@5"
-        # question either way, so the metric is comparable across the four configs.
+        # Every maintained retrieval preset uses RRF fusion, so this is one consistent rank.
         "fusion_at_5_recall": recall(top5),
         "candidate_precision": (len(gold & cand) / len(cand)) if cand else None,
         "selection_tables": selection,

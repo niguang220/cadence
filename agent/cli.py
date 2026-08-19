@@ -23,13 +23,7 @@ _COMMANDS = {"ask", "retrieve", "index-values", "build-demo-db"}
 _DEFAULT_CONFIG_NAME = "governed_rrf"
 _CONFIG_FACTORIES = {
     "governed_rrf": RetrievalConfig.default,
-    "lexical_baseline": RetrievalConfig.lexical_baseline,
-    "rrf_hybrid": RetrievalConfig.rrf_hybrid,
-    "value_ablation": RetrievalConfig.value_ablation,
-    "dense_value": RetrievalConfig.dense_value,
-    "legacy_minmax": RetrievalConfig.legacy_minmax,
-    # deprecated alias, kept for one release cycle
-    "current_hybrid": RetrievalConfig.current_hybrid,
+    "governed_rrf_value": RetrievalConfig.governed_rrf_value,
 }
 
 
@@ -85,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _normalize_legacy_args(argv: list[str]) -> list[str]:
+def _normalize_argv(argv: list[str]) -> list[str]:
     """Map the original ``python -m agent QUESTION`` interface onto subcommands."""
     if not argv or argv[0] in _COMMANDS or argv[0] in {"-h", "--help", "--version"}:
         return argv
@@ -241,7 +235,7 @@ def _run_index(args: argparse.Namespace) -> int:
     tables = introspect(db)
     # Use a value-enabled config solely to construct the concrete backend. The index name is
     # schema-derived and shared by every value-enabled retrieval preset.
-    backend = _value_backend(RetrievalConfig.value_ablation(), tables, args.es_url,
+    backend = _value_backend(RetrievalConfig.governed_rrf_value(), tables, args.es_url,
                              require_index=False, db_path=db)
     try:
         result = build_value_index(tables, db, backend)
@@ -277,7 +271,7 @@ def _run_build_demo(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser().parse_args(_normalize_legacy_args(raw))
+    args = build_parser().parse_args(_normalize_argv(raw))
     try:
         if args.command == "ask":
             return _run_ask(args)
