@@ -76,10 +76,9 @@ surfaces the six cells were indistinguishable, so the rule fell back to the stan
 BM25 implementation at the neutral equal weighting rather than fitting a weight to a surface
 that could not measure it.
 
-Elasticsearch value retrieval remains opt-in. `legacy_minmax` preserves the previous min-max +
-one-hop implementation as a historical comparator for one release cycle; `current_hybrid` is a
-deprecated alias for it. Available CLI presets are `governed_rrf`, `lexical_baseline`,
-`rrf_hybrid`, `value_ablation`, `dense_value`, and `legacy_minmax`. `cadence retrieve ... --json`
+Elasticsearch value retrieval remains opt-in through the `governed_rrf_value` product mode. The public
+CLI intentionally exposes only the shipping default and that value-enabled mode; ablation presets
+live in the evaluation drivers rather than the product surface. `cadence retrieve ... --json`
 exposes the full typed retrieval result without calling an LLM.
 
 ## How a request flows
@@ -114,30 +113,28 @@ Model-backed stages propose interpretations, plans, SQL, consistency judgments, 
 Deterministic code owns the enforceable boundaries: allowed plan shapes, retry budgets,
 read-only execution, governance routing, and the sandbox boundary.
 
-Clarification is deterministic and is asked, not guessed. The public Streamlit demo runs a
-single non-interactive turn: there is no session resume, so a clarification is shown and the
-question has to be edited and resubmitted. Interrupt-based clarification and plan approval exist
-as library APIs with tests, but have no public interaction surface.
+The public Streamlit demo runs a single non-interactive turn. A small deterministic clarification
+heuristic may ask the user to rephrase, but the demo cannot resume that turn; this is an
+experimental boundary, not a headline capability. Interrupt-based clarification and plan approval
+exist as tested library APIs with in-memory state.
 
 ## Current evidence
 
-The numbers below answer different questions and should not be combined into one accuracy
-score. The three E2E rows predate the governed-RRF cutover: in them "default" means the
-**then-default** `current_hybrid`, now preserved as `legacy_minmax`. Their numbers and the
-conclusions reached at the time are kept as they were.
+The numbers below answer different questions and should not be combined into one accuracy score.
+Some rows are historical experiments from before the current architecture. Their reviewed reports
+preserve the exact configuration names and conclusions used at measurement time; those old
+configurations are not part of the executable product surface today.
 
 | Evaluation | Result | Interpretation |
 | --- | --- | --- |
 | Deterministic gate fixture | 14/14 routes match the specification | A CI contract check (`by_construction`), not population accuracy |
-| Value-sensitive E2E, 280 runs | `dense_value` 32/50 vs then-default 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
-| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift is mixed with case-level regressions; that candidate was not promoted at the time |
-| Spider screen, 180 runs | `rrf_hybrid` 56/90 vs then-default 55/90, but lower context recall and 3 extra `no_sql` outcomes | The preregistered gate rejected that candidate at the time |
-| Governed-RRF cutover, 180 runs | `governed_rrf` 58/90 vs `legacy_minmax` 58/90; candidate recall 100.0% vs 96.1%; context recall 98.3% vs 100.0% | The absolute release gate passed; this is the run behind the current default |
+| Value-sensitive E2E, 280 runs | RRF + value retrieval 32/50 vs the pre-RRF baseline 13/50; 0 PII leaks across 80 controls | Value retrieval helps the narrow cases it was designed for |
+| General-mix E2E, 600 runs | Semantic ON: 101/120 vs 93/120; OFF: 10/120 vs 13/120 | Aggregate lift was mixed with case-level regressions; the candidate was rejected |
+| Spider screen, 180 runs | Typed RRF 56/90 vs the pre-RRF baseline 55/90, but lower context recall and 3 extra `no_sql` outcomes | The preregistered gate rejected that candidate |
+| Shipping gate, 180 runs | `governed_rrf` 58/90; candidate recall 100.0%; context recall 98.3% | The absolute release gate passed; this is the run behind the current default |
 
-The value-sensitive comparison is documented in the
-[Stage 3B report](docs/reliability/2026-08-11-stage3b-current-hybrid-headtohead.md).
-The latest consolidated interpretation, including the general-mix run and open problems, is
-in [Project status](docs/STATUS.md).
+The latest consolidated interpretation, including historical experiments and current boundaries,
+is in [Project status](docs/STATUS.md).
 
 The cutover to the typed RRF default — the deterministic backend/weight matrix and the frozen
 full-agent gate run — is recorded in the
@@ -194,7 +191,7 @@ cadence index-values \
 
 cadence retrieve \
   --db /tmp/cadence-value.db \
-  --config dense_value \
+  --config governed_rrf_value \
   --es-url http://localhost:9200 \
   "tickets for 上海云图信息技术"
 ```
@@ -207,11 +204,11 @@ Add `--json` to `retrieve` or `index-values` for machine-readable output. The sa
 - The main fixtures use small, repository-owned SaaS schemas. The 30-case Spider screen adds an
   external check, but is too small and uses a custom oracle, so it is not population accuracy.
 - Elasticsearch value retrieval requires a separately managed service and an explicit
-  `index-values` ingestion step. The CLI exposes the evaluated presets but does not start or
+  `index-values` ingestion step. The CLI exposes the shipping and value-enabled modes but does not start or
   operate Elasticsearch itself.
-- The semantic layer governs a metric registry, not yet a complete declarative entity and
+- The semantic layer governs a metric registry, not a complete declarative entity and
   relationship model.
-- HITL clarification and plan approval exist as library APIs (`start_agent_session` /
+- HITL clarification and plan approval exist as experimental library APIs (`start_agent_session` /
   `resume_agent_session`) with tests, but no public entry point drives them: the CLI and the
   Streamlit demo both run a single non-interactive turn. Their state and the runtime
   model/backend registries are in memory and intended for local use, not a distributed service.

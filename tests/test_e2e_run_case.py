@@ -18,9 +18,9 @@ def _tables(saas_db):
 def _fake_answer_with_rr(config_name, *, sql="SELECT 42", rows=((42,),), ok=True):
     tables = ["subscription"]
     rr = RetrievalResult(config_name=config_name, signals=[],
-        candidates=[TableCandidate(t, {}, None, i + 1) for i, t in enumerate(tables)],
+        candidates=[TableCandidate(t, {}, 1.0 / (i + 1), i + 1) for i, t in enumerate(tables)],
         metric_matches=[], selection=SelectionDecision(tables, [], "topk", {}),
-        relation_plan=RelationPlan("legacy_one_hop", tables, [], tables, [], [], []),
+        relation_plan=RelationPlan("shortest_path", tables, [], tables, [], [], []),
         stage_events=[])
     return AnswerResult(
         question="q?", retrieved_tables=tables, sql=sql,
@@ -37,7 +37,7 @@ def test_run_case_matches_gold_when_model_returns_gold_sql(saas_db):
                            required_tables=["subscription"])
     model = PlanningFakeModel(gold)
     rec = run_case(saas_db, _tables(saas_db), case, model, semantic_layer=False,
-                   config=RetrievalConfig.legacy_minmax(), k=5, repeat_index=0)
+                   config=RetrievalConfig.default(), k=5, repeat_index=0)
     assert rec.exec_match is True and rec.sql_valid_final is True
     assert rec.id == "cnt" and rec.semantic_layer is False
 
@@ -49,7 +49,7 @@ def test_run_case_mismatch_when_model_returns_wrong_sql(saas_db):
                            required_tables=["subscription"])
     model = PlanningFakeModel("SELECT COUNT(*) FROM account")   # different number
     rec = run_case(saas_db, _tables(saas_db), case, model, semantic_layer=False,
-                   config=RetrievalConfig.legacy_minmax(), k=5, repeat_index=0)
+                   config=RetrievalConfig.default(), k=5, repeat_index=0)
     assert rec.exec_match is False and rec.failure_stage == "answer_mismatch"
 
 
@@ -60,13 +60,13 @@ def test_run_case_raises_on_broken_gold_sql(saas_db):
     model = PlanningFakeModel("SELECT 1")
     with pytest.raises(RuntimeError, match="gold_sql"):
         run_case(saas_db, _tables(saas_db), case, model, semantic_layer=False,
-                config=RetrievalConfig.legacy_minmax(), k=5, repeat_index=0)
+                config=RetrievalConfig.default(), k=5, repeat_index=0)
 
 
 def test_run_case_forwards_config_k_and_value_backend(saas_db, monkeypatch):
     import evalharness.e2e_eval as ee
     seen = {}
-    cfg = RetrievalConfig.legacy_minmax()
+    cfg = RetrievalConfig.default()
     sentinel_backend = object()
 
     def spy(db, q, *, model, tables, semantic_layer, k, retrieval_config, value_backend=None):

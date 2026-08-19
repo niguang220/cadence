@@ -2,13 +2,10 @@ import re
 import pytest
 
 import agent.graph as graph
-import agent.hybrid_retriever as hr
 from agent.db.build_demo_db import build
 from agent.db.build_saas_db import build as build_saas
-from agent.db.introspect import introspect, render_schema, expand_with_fk_neighbors
-from agent.hybrid_retriever import retrieve
-from agent.schema_relations import join_paths
-from agent.graph import _schema_recall, _table_relation
+from agent.db.introspect import introspect, render_schema
+from agent.graph import _schema_recall
 from agent.semantic_layer import MetricRegistry, MetricRetrievalHit
 from agent.execution import ExecutionResult
 from agent.generation import AnswerResult
@@ -27,46 +24,8 @@ class _FakeDense:
     def column_scores(self, q, tables): return self._rows
 
 
-class _ZeroIndex:
-    def __init__(self, tables): pass
-    def table_scores(self, q): return {}
-
-
-@pytest.fixture
-def det_index(monkeypatch):
-    monkeypatch.setattr(hr, "SemanticIndex", _ZeroIndex)   # dense contributes nothing -> deterministic lexical
-    hr._INDEX_CACHE.clear()
-    yield
-    hr._INDEX_CACHE.clear()
-
-
 def _demo(tmp_path): return introspect(build(tmp_path / "t.db"))
 def _saas(tmp_path): return introspect(build_saas(tmp_path / "s.db"))
-
-
-def test_accept_1_legacy_minmax_parity_vs_legacy_oracle(det_index, tmp_path):
-    tables = _demo(tmp_path)
-    q = "total sales by billing country"
-    top_k = retrieve(q, tables, k=5)                                  # legacy oracle
-    expected = render_schema(tables, only=sorted(expand_with_fk_neighbors(tables, top_k)))
-    paths = join_paths(tables, top_k)
-    if paths:
-        hint = "\n".join(f"{p['from']}.{p['on']} = {p['to']}.{p['ref_on']}" for p in paths)
-        expected = f"{expected}\n\nJoin paths:\n{hint}"
-    state = {"question": q, "tables": tables, "k": 5,
-             "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())}
-    s1 = _schema_recall(state)
-    assert s1["retrieved_tables"] == top_k                           # candidate order + retrieved_tables
-    s2 = _table_relation({**state, **s1})
-    assert s2.get("schema", s1["schema"]) == expected                # complete schema + join-hint string
-    # non-default runtime k matches the legacy oracle
-    top3 = retrieve(q, tables, k=3)
-    s_k3 = _schema_recall({**state, "k": 3})
-    assert s_k3["retrieved_tables"] == top3
-    # off-topic -> refusal (empty retrieved_tables + empty schema)
-    s_off = _schema_recall({"question": "what is the weather today", "tables": tables, "k": 5,
-                            "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())})
-    assert s_off["retrieved_tables"] == [] and s_off["schema"] == ""
 
 
 def test_accept_2_determinism_channel_fusion_ranks_and_scores(tmp_path):
@@ -95,7 +54,7 @@ def test_accept_3_illegal_selection_falls_back_with_event():
     assert ev.stage == "selection" and ev.event == "selector_fallback"
 
 
-def test_accept_4_protected_anchor_survives_topk_and_legacy_telemetry(det_index, tmp_path):
+def test_accept_4_protected_anchor_survives_topk(tmp_path):
     saas = _saas(tmp_path)
     mrr = next(m for m in MetricRegistry.load().metrics if m.name == "mrr")
     hit = MetricRetrievalHit(mrr, "alias", 1.0)
@@ -112,11 +71,6 @@ def test_accept_4_protected_anchor_survives_topk_and_legacy_telemetry(det_index,
     assert "account" in rrf.selection.anchor_tables                # protected -> kept
     assert "account" not in rrf.selection.dropped_tables
     assert "user" in rrf.selection.dropped_tables                  # unprotected rank-6 -> pruned by TopK
-    # legacy control: metric is telemetry only; account is NOT force-added.
-    legacy = run_retrieval("how many active subscriptions", saas, RetrievalConfig.legacy_minmax(),
-                           k=3, metric_hits=[hit])
-    assert legacy.metric_matches and legacy.metric_matches[0].metric == "mrr"
-    assert "account" not in legacy.selection.anchor_tables
 
 
 def test_accept_5_bridges_only_from_planner_and_renderer_pure(tmp_path):
@@ -137,17 +91,10 @@ def _rendered_tables(schema):
     return set(re.findall(r"TABLE (\w+)", schema))
 
 
-def test_accept_6_graph_renders_context_tables_both_strategies(det_index, tmp_path, monkeypatch):
+def test_accept_6_graph_renders_relation_context(tmp_path, monkeypatch):
     tables = _demo(tmp_path)
     q = "total sales by billing country"
-    # legacy_one_hop via the real graph node (det_index -> deterministic retrieve)
-    state_l = {"question": q, "tables": tables, "k": 5,
-               "retrieval_config_serialized": serialize_config(RetrievalConfig.legacy_minmax())}
-    s_l = _schema_recall(state_l)
-    plan_l = deserialize_result(s_l["retrieval_result_serialized"]).relation_plan
-    assert plan_l.strategy == "legacy_one_hop"
-    assert _rendered_tables(s_l["schema"]) == set(plan_l.context_tables)
-    # shortest_path via the REAL pipeline with a deterministic dense backend (no fastembed)
+    # The real pipeline with a deterministic dense backend (no fastembed).
     real = graph.run_retrieval
     monkeypatch.setattr(graph, "run_retrieval",
         lambda qq, tt, cc, *, k, metric_hits=None, value_backend=None, value_query=None: real(
@@ -165,7 +112,7 @@ def test_accept_7_lexical_baseline_provenance_in_record():
     cfg = RetrievalConfig.lexical_baseline()
     tables = ("subscription",)
     rr = RetrievalResult(config_name=cfg.name, signals=[],
-        candidates=[TableCandidate("subscription", {}, None, 1)], metric_matches=[],
+        candidates=[TableCandidate("subscription", {}, 1.0, 1)], metric_matches=[],
         selection=SelectionDecision(["subscription"], [], "topk", {}),
         relation_plan=RelationPlan("shortest_path", ["subscription"], [], ["subscription"], [], [], []),
         stage_events=[])

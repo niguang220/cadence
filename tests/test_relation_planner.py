@@ -1,8 +1,8 @@
 from collections import defaultdict
 
 from agent.db.build_saas_db import build
-from agent.db.introspect import ForeignKey, Table, introspect, expand_with_fk_neighbors
-from agent.retrieval.relation import plan_relations, legacy_one_hop_plan
+from agent.db.introspect import ForeignKey, Table, introspect
+from agent.retrieval.relation import plan_relations
 
 
 def _graph(edges, extra_nodes=()):
@@ -78,10 +78,3 @@ def test_context_equals_anchors_union_bridges_on_real_db(tmp_path):
     plan = plan_relations(tables, ["invoice_line", "account"], max_hops=3)
     assert set(plan.context_tables) == set(plan.anchors) | set(plan.bridges)
     assert all(b not in plan.anchors for b in plan.bridges)
-
-
-def test_legacy_closure_matches_expand_and_no_bridges(tmp_path):
-    tables = introspect(str(build(tmp_path / "saas.db")))
-    plan = legacy_one_hop_plan(tables, ["subscription"])
-    assert plan.strategy == "legacy_one_hop" and plan.bridges == []
-    assert set(plan.context_tables) == expand_with_fk_neighbors(tables, ["subscription"])

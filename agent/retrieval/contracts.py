@@ -23,8 +23,8 @@ class RetrievalConfig:
     dense_backend: Literal["memory", "qdrant"] | None = "memory"
     value_backend: Literal["es"] | None = None
     selector: Literal["llm"] | None = None
-    fusion: Literal["legacy_minmax", "rrf"] = "rrf"
-    relation_strategy: Literal["legacy_one_hop", "shortest_path"] = "shortest_path"
+    fusion: Literal["rrf"] = "rrf"
+    relation_strategy: Literal["shortest_path"] = "shortest_path"
     candidate_k: int = 15
     context_anchor_k: int = 5
     rrf_constant: int = 60
@@ -34,6 +34,13 @@ class RetrievalConfig:
     # a zero lexical weight is dense-only ranking, not hybrid fusion.
     lexical_weight: float = 1.0
     dense_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        """Reject stale serialized configs instead of silently routing them as RRF."""
+        if self.fusion != "rrf":
+            raise ValueError(f"unsupported fusion strategy: {self.fusion}")
+        if self.relation_strategy != "shortest_path":
+            raise ValueError(f"unsupported relation strategy: {self.relation_strategy}")
 
     def with_weights(self, *, lexical: float, dense: float) -> "RetrievalConfig":
         """Return a copy carrying explicit channel weights. Rejects a non-positive weight so a
@@ -73,26 +80,15 @@ class RetrievalConfig:
                    lexical_weight=1.0, dense_weight=1.0)
 
     @classmethod
+    def governed_rrf_value(cls) -> "RetrievalConfig":
+        """The shipping pipeline with the opt-in Elasticsearch value channel enabled."""
+        return replace(cls.governed_rrf(), name="governed_rrf_value", value_backend="es")
+
+    @classmethod
     def lexical_baseline(cls) -> "RetrievalConfig":
         return cls(name="lexical_baseline", lexical=True, dense_backend=None,
                    value_backend=None, selector=None, fusion="rrf",
                    relation_strategy="shortest_path")
-
-    @classmethod
-    def legacy_minmax(cls) -> "RetrievalConfig":
-        """The preserved pre-migration retrieval implementation: min-max fusion over the
-        legacy hybrid retriever plus one-hop FK closure. Retained for one release cycle as
-        a historical comparator for already-published results. NOT a supported product mode
-        and never a default."""
-        return cls(name="legacy_minmax", lexical=True, dense_backend="memory",
-                   value_backend=None, selector=None, fusion="legacy_minmax",
-                   relation_strategy="legacy_one_hop")
-
-    @classmethod
-    def current_hybrid(cls) -> "RetrievalConfig":
-        """Deprecated alias for ``legacy_minmax`` kept for one release cycle so existing
-        callers keep working. Use ``legacy_minmax()`` (comparator) or ``default()`` (product)."""
-        return cls.legacy_minmax()
 
     @classmethod
     def rrf_hybrid(cls) -> "RetrievalConfig":
@@ -108,8 +104,7 @@ class RetrievalConfig:
 
     @classmethod
     def dense_value(cls) -> "RetrievalConfig":
-        """Factorial cell: lexical + dense + value (no LLM selector). The dense+value corner of the
-        Stage 2 ablation over {dense off/on} x {value off/on}, with lexical as the admission floor."""
+        """Evaluation-only factorial cell retained for published ablation provenance."""
         return cls(name="dense_value", lexical=True, dense_backend="memory",
                    value_backend="es", selector=None, fusion="rrf",
                    relation_strategy="shortest_path")
@@ -147,9 +142,7 @@ class ChannelTableResult:
 class TableCandidate:
     table: str
     channel_results: dict[str, ChannelTableResult]
-    # None for legacy compatibility candidates — the legacy min-max fusion is not this
-    # pipeline's RRF; only fusion_rank is meaningful there. Real float for RRF candidates.
-    fusion_score: float | None
+    fusion_score: float
     fusion_rank: int
 
 
@@ -182,7 +175,7 @@ class RelationEdge:
 
 @dataclass
 class RelationPlan:
-    strategy: Literal["legacy_one_hop", "shortest_path"]
+    strategy: Literal["shortest_path"]
     anchors: list[str]
     bridges: list[str]
     context_tables: list[str]

@@ -164,10 +164,10 @@ def _record(name, index, matched, *, candidate_recall=1.0, context_recall=1.0, n
 
 def test_summary_applies_paired_preregistered_gate():
     records = [
-        _record("legacy_minmax", 1, True),
-        _record("legacy_minmax", 2, False, candidate_recall=0.5, context_recall=0.5),
-        _record("rrf_hybrid", 1, True),
-        _record("rrf_hybrid", 2, True),
+        _record("lexical_baseline", 1, True),
+        _record("lexical_baseline", 2, False, candidate_recall=0.5, context_recall=0.5),
+        _record("governed_rrf", 1, True),
+        _record("governed_rrf", 2, True),
     ]
     summary = summarize_spider(records)
     assert summary["paired"] == {
@@ -201,11 +201,10 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
     )
     assert len(output["records"]) == 2
     assert [row["retrieval_config"]["name"] for row in output["records"]] == [
-        "legacy_minmax",
-        "rrf_hybrid",
+        "lexical_baseline",
+        "governed_rrf",
     ]
-    # The tiny plural question deliberately exposes a real config difference: the legacy
-    # retriever may reject it while RRF retrieves ``pet``. The runner must preserve that result.
+    # The maintained product arm retrieves ``pet`` and the runner preserves that result.
     assert output["records"][1]["exec_match"] is True
     serialized = json.dumps(output["records"])
     assert "How many pets?" not in serialized
@@ -214,17 +213,17 @@ def test_comparison_runs_both_configs_and_redacts_raw_records(tmp_path):
 
 # --- driver config selection ---------------------------------------------------------------
 
-def test_configs_default_to_the_published_pair():
+def test_configs_default_to_the_maintained_pair():
     from evals.spider_external import configs_from_names
 
-    assert [c.name for c in configs_from_names(None)] == ["legacy_minmax", "rrf_hybrid"]
+    assert [c.name for c in configs_from_names(None)] == ["lexical_baseline", "governed_rrf"]
 
 
-def test_configs_can_select_the_shipping_default_against_the_comparator():
+def test_configs_can_select_two_maintained_presets():
     from evals.spider_external import configs_from_names
 
-    pair = configs_from_names("legacy_minmax,governed_rrf")
-    assert [c.name for c in pair] == ["legacy_minmax", "governed_rrf"]
+    pair = configs_from_names("rrf_hybrid,governed_rrf")
+    assert [c.name for c in pair] == ["rrf_hybrid", "governed_rrf"]
     assert pair[1].lexical_backend == "bm25"
 
 
@@ -234,6 +233,6 @@ def test_configs_rejects_a_bad_selection():
     from evals.spider_external import configs_from_names
 
     with pytest.raises(ValueError):
-        configs_from_names("legacy_minmax")
+        configs_from_names("governed_rrf")
     with pytest.raises(ValueError):
-        configs_from_names("legacy_minmax,not_a_preset")
+        configs_from_names("governed_rrf,not_a_preset")

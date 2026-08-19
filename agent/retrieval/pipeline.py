@@ -1,10 +1,4 @@
-"""RetrievalPipeline: assembles channels, aggregate, fusion, selector, relation, and metric
-matches behind a single ``run_retrieval`` entrypoint. Routes ONLY on config STRATEGY fields
-(fusion / relation_strategy / lexical / dense_backend / ...) — never on ``config.name``, so a
-caller can build a custom RetrievalConfig and still get correct routing. ``config.fusion`` and
-``config.relation_strategy`` are independent knobs: fusion picks candidate production (RRF vs.
-legacy min-max) and relation_strategy picks the closure (shortest_path vs. legacy_one_hop) --
-any of the four combinations is valid."""
+"""Typed retrieval pipeline: channels -> RRF -> selection -> relation planning."""
 from __future__ import annotations
 
 from agent.db.introspect import Table
@@ -14,10 +8,10 @@ from agent.retrieval.channels import DenseChannel, LexicalChannel, ValueChannel
 from agent.retrieval.contracts import (RelationPlan, RetrievalConfig, RetrievalResult,
                                         RetrievalStageEvent, SelectionDecision,
                                         UnsupportedRetrievalCapability)
-from agent.retrieval.fusion import legacy_candidates, weighted_rrf
+from agent.retrieval.fusion import weighted_rrf
 from agent.retrieval.lexical_backends import lexical_backend_for
 from agent.retrieval.metric_match import MetricMatchProvider
-from agent.retrieval.relation import legacy_one_hop_plan, plan_relations
+from agent.retrieval.relation import plan_relations
 from agent.retrieval.selector import NoOpSelector, TopKSelector, protected_anchors
 from agent.retrieval.value_backend import ValueBackendError
 
@@ -62,21 +56,13 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
         raise UnsupportedRetrievalCapability(missing)
     matches = MetricMatchProvider(tables).from_hits(metric_hits)
 
-    if config.fusion == "legacy_minmax":
-        candidates = legacy_candidates(question, tables, k=k)   # legacy candidates have no RRF score
-        anchors = [c.table for c in candidates]                 # retrieve() already applied top-k
-        # metric matches are TELEMETRY ONLY on the legacy path — never added to anchors (parity).
-        selection = SelectionDecision(anchor_tables=anchors, dropped_tables=[],
-                                      selector="noop", model_reason={})
-        signals, events = [], []
-    else:
-        candidates, selection, signals, events, rejected = _rrf_fusion(
-            question, tables, config, matches, dense_backend, value_backend, value_query)
-        if rejected:
-            return RetrievalResult(config_name=config.name, signals=signals, candidates=[],
-                                   metric_matches=matches, selection=selection,
-                                   relation_plan=_empty_plan(config.relation_strategy),
-                                   stage_events=events)
+    candidates, selection, signals, events, rejected = _rrf_fusion(
+        question, tables, config, matches, dense_backend, value_backend, value_query,
+        context_anchor_k=k)
+    if rejected:
+        return RetrievalResult(config_name=config.name, signals=signals, candidates=[],
+                               metric_matches=matches, selection=selection,
+                               relation_plan=_empty_plan(), stage_events=events)
 
     plan = _closure(config, tables, selection.anchor_tables, events)
     return RetrievalResult(config_name=config.name, signals=signals, candidates=candidates,
@@ -84,13 +70,11 @@ def run_retrieval(question: str, tables: list[Table], config: RetrievalConfig, *
                            stage_events=events)
 
 
-def _empty_plan(strategy):
-    return RelationPlan(strategy, [], [], [], [], [], [])
+def _empty_plan():
+    return RelationPlan("shortest_path", [], [], [], [], [], [])
 
 
 def _closure(config, tables, anchors, events):
-    if config.relation_strategy == "legacy_one_hop":
-        return legacy_one_hop_plan(tables, anchors)
     plan = plan_relations(tables, anchors, max_hops=config.max_bridge_hops)
     if plan.unconnected_anchors:
         events.append(RetrievalStageEvent(stage="relation", event="unconnected_anchor",
@@ -99,7 +83,7 @@ def _closure(config, tables, anchors, events):
 
 
 def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=None,
-                value_query=None):
+                value_query=None, context_anchor_k=None):
     """Channels + aggregate + admission gate + weighted_rrf + protected anchors + selector.
     NO relation planning here (that's ``_closure``). ``question`` feeds lexical/dense; ``value_query``
     feeds ONLY the value channel (defaults to ``question``). Returns
@@ -153,7 +137,8 @@ def _rrf_fusion(question, tables, config, matches, dense_backend, value_backend=
     candidates = weighted_rrf(channel_results, rrf_constant=config.rrf_constant,
                               weights=config.channel_weights(),
                               candidate_k=config.candidate_k)
-    protected = protected_anchors(matches)                        # RRF only (B)
-    selector = NoOpSelector() if len(candidates) <= config.context_anchor_k else TopKSelector()
-    selection = selector.select(candidates, protected, context_anchor_k=config.context_anchor_k)
+    protected = protected_anchors(matches)
+    selection_k = config.context_anchor_k if context_anchor_k is None else context_anchor_k
+    selector = NoOpSelector() if len(candidates) <= selection_k else TopKSelector()
+    selection = selector.select(candidates, protected, context_anchor_k=selection_k)
     return candidates, selection, signals, events, False

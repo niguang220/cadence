@@ -1,8 +1,7 @@
-"""The canonical public retrieval default and the legacy compatibility alias.
+"""The canonical public retrieval default and its construction sites.
 
 Every public entry point must construct its default from ONE source. These tests pin that
-single source, pin the deprecated ``current_hybrid`` alias to the preserved legacy config,
-and assert the six public construction sites agree with each other -- so a future default
+single source and assert the public construction sites agree with each other -- so a future default
 change cannot land in five places and be forgotten in the sixth.
 """
 from __future__ import annotations
@@ -27,23 +26,14 @@ def test_default_is_a_single_canonical_source():
     assert default.value_backend is None      # Elasticsearch value retrieval stays opt-in
 
 
-def test_legacy_minmax_preserves_the_old_retrieval_implementation():
-    legacy = RetrievalConfig.legacy_minmax()
-    assert legacy.name == "legacy_minmax"
-    assert legacy.fusion == "legacy_minmax"
-    assert legacy.relation_strategy == "legacy_one_hop"
-    assert legacy.lexical is True
-    assert legacy.dense_backend == "memory"
-    assert legacy.value_backend is None
-
-
-def test_current_hybrid_is_a_deprecated_alias_for_legacy_minmax():
-    # one release cycle of source compatibility: same config, same behaviour
-    assert RetrievalConfig.current_hybrid() == RetrievalConfig.legacy_minmax()
-
-
-def test_default_is_not_the_legacy_config():
-    assert RetrievalConfig.default() != RetrievalConfig.legacy_minmax()
+@pytest.mark.parametrize("field,value", [
+    ("fusion", "legacy_minmax"),
+    ("relation_strategy", "legacy_one_hop"),
+])
+def test_removed_strategies_fail_loudly(field, value):
+    values = {field: value}
+    with pytest.raises(ValueError, match="unsupported"):
+        RetrievalConfig(name="stale", **values)
 
 
 @pytest.mark.parametrize(
@@ -84,15 +74,13 @@ def test_cli_default_config_is_the_canonical_one():
         assert action.default == cli._DEFAULT_CONFIG_NAME
 
 
-def test_legacy_alias_is_still_selectable_in_the_cli():
+def test_cli_exposes_only_product_configs():
     import agent.cli as cli
 
-    # deprecated but not removed: existing scripts keep working for one cycle
-    assert cli._config("current_hybrid") == RetrievalConfig.legacy_minmax()
-    assert cli._config("legacy_minmax") == RetrievalConfig.legacy_minmax()
+    assert set(cli._CONFIG_FACTORIES) == {"governed_rrf", "governed_rrf_value"}
 
 
 def test_config_is_frozen_so_the_shared_default_cannot_be_mutated():
     default = RetrievalConfig.default()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        default.fusion = "legacy_minmax"     # type: ignore[misc]
+        default.fusion = "rrf"     # type: ignore[misc]

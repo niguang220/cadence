@@ -75,7 +75,6 @@ from agent.retrieval.pipeline import run_retrieval
 from agent.retrieval.serde import (deserialize_config, deserialize_result, serialize_config,
                                     serialize_result)
 from agent.sandbox import SandboxResult, run_in_sandbox   # re-exported here so tests can fake the sandbox
-from agent.schema_relations import join_paths
 from agent.semantic_consistency import check_semantic_consistency
 from agent.semantic_layer import MetricDef, MetricRegistry
 from agent.tools import build_get_schema_tool
@@ -315,11 +314,10 @@ def _retrieval_config(state: AgentState) -> RetrievalConfig:
 
 
 def _schema_recall(state: AgentState, config=None) -> dict:
-    """Retrieval via the typed pipeline. The legacy_minmax comparator reproduces the pre-migration
-    hybrid recall + one-hop render byte-for-byte; retrieved_tables stays the pre-expansion candidate
-    top-k on that path. Under the RRF default retrieved_tables is the selected anchor set. The rendered
-    prompt set is relation_plan.context_tables (which equals it for RRF and equals the one-hop closure
-    for legacy). Empty recall -> feasibility owns the refusal, exactly as before.
+    """Run the typed RRF pipeline and render its relation-planned context.
+
+    ``retrieved_tables`` is the selected anchor set; the prompt schema is rendered from
+    ``relation_plan.context_tables``. Empty recall is handed to the feasibility node.
 
     The value backend is resolved from the injected runtime seam (state / thread registry), so a value
     config reaches ES here; ``value_grounding`` projects the canonical matched values for generation."""
@@ -330,10 +328,7 @@ def _schema_recall(state: AgentState, config=None) -> dict:
                            metric_hits=hits, value_backend=_value_backend_for_state(state, config),
                            value_query=state["question"])   # value linking uses the ORIGINAL user question
 
-    if rconfig.fusion == "legacy_minmax":
-        retrieved = [c.table for c in result.candidates]     # pre-expansion top-k (unchanged public value)
-    else:
-        retrieved = list(result.selection.anchor_tables)
+    retrieved = list(result.selection.anchor_tables)
     base = {"tables": tables, "retrieved_tables": retrieved,
             "value_grounding": value_grounding_block(result),
             "retrieval_result_serialized": serialize_result(result)}
@@ -345,17 +340,17 @@ def _schema_recall(state: AgentState, config=None) -> dict:
 
 
 def _table_relation(state: AgentState) -> dict:
-    """Join hints, routed by the relation plan's STRATEGY (independent of fusion): legacy_one_hop ->
-    byte-identical ``join_paths`` over the recalled tables; shortest_path -> hints from
-    ``RelationPlan.edges`` only (no join_paths / no second FK expansion). Falls back to legacy
-    join_paths when no serialized result is present (old direct-call tests)."""
+    """Render deterministic join hints from the retrieval relation plan.
+
+    The retrieval result is the single relation source; this node never performs a second
+    FK expansion or invents a parallel set of join edges.
+    """
     serialized = state.get("retrieval_result_serialized")
-    plan = deserialize_result(serialized).relation_plan if serialized else None
-    if plan is None or plan.strategy == "legacy_one_hop":
-        paths = join_paths(state["tables"], state["retrieved_tables"])
-    else:  # shortest_path
-        paths = [{"from": e.from_table, "on": e.from_column, "to": e.to_table, "ref_on": e.to_column}
-                 for e in plan.edges]
+    if not serialized:
+        raise RuntimeError("table_relation requires retrieval_result_serialized")
+    plan = deserialize_result(serialized).relation_plan
+    paths = [{"from": e.from_table, "on": e.from_column, "to": e.to_table, "ref_on": e.to_column}
+             for e in plan.edges]
     out = {"join_paths": paths,
            "trace": [{"node": "table_relation", "paths": len(paths), "join_paths": paths}]}
     if paths:

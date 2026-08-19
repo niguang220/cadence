@@ -34,8 +34,10 @@ def test_schema_retrieval_renders_every_required_table(tmp_path):
     # Causal-cleanliness gate: if the schema retriever misses a required table, an OFF/ON
     # miss would be a SCHEMA-LINKING failure, not a business-semantics one. Require recall 1.0.
     import re
-    from agent.db.introspect import expand_with_fk_neighbors, introspect, render_schema
-    from agent.hybrid_retriever import retrieve
+    from agent.db.introspect import introspect, render_schema
+    from agent.retrieval.contracts import RetrievalConfig
+    from agent.retrieval.pipeline import run_retrieval
+    from agent.semantic_layer import MetricRegistry
 
     def _rendered_tables(rendered_text, tables):
         """Return the set of table names whose header line appears in rendered_text.
@@ -57,9 +59,12 @@ def test_schema_retrieval_renders_every_required_table(tmp_path):
 
     db = str(build(tmp_path / "saas.db"))
     tables = introspect(db)
+    registry = MetricRegistry.load()
     for case in CASES:
-        top = retrieve(case["question"], tables, k=5)
-        rendered_text = render_schema(tables, only=sorted(expand_with_fk_neighbors(tables, top)))
+        hits = registry.retrieve_matches(case["question"])
+        result = run_retrieval(case["question"], tables, RetrievalConfig.default(), k=5,
+                               metric_hits=hits)
+        rendered_text = render_schema(tables, only=result.relation_plan.context_tables)
         rendered = _rendered_tables(rendered_text, tables)
         missing = set(case["required_tables"]) - rendered
         assert not missing, f'{case["id"]}: schema retrieval missed {missing} -> reword question/raise k, do not pass'
